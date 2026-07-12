@@ -1,0 +1,236 @@
+{
+  "macroTechs": [
+    {
+      "id": "MACRO_DOOMSDAY",
+      "name": "Doomsday Device",
+      "description": "A weapon platform whose blast radius is measured in 'before' and 'after.' Built once. Used, hopefully, never.",
+      "baseCost": { "minerals": 1200, "energy": 900, "researchTime": 220 },
+      "statModifiers": {
+        "winCondition": true,
+        "globalEffect": { "type": "victory", "description": "Instant map-wide devastation of all enemy structures" }
+      }
+    },
+    {
+      "id": "MACRO_PRECURSOR_AI",
+      "name": "Precursor AI",
+      "description": "Something old and patient wakes up inside the network, and it has been listening for a very long time.",
+      "baseCost": { "minerals": 1000, "energy": 1100, "researchTime": 210 },
+      "statModifiers": {
+        "winCondition": true,
+        "globalEffect": { "type": "victory", "description": "Hijacks control of all enemy production facilities" }
+      }
+    },
+    {
+      "id": "MACRO_ORBITAL_FORGE",
+      "name": "Orbital Forge",
+      "description": "A factory the size of a moon, built in the dark above the war, manufacturing things the war hasn't seen yet.",
+      "baseCost": { "minerals": 1300, "energy": 700, "researchTime": 200 },
+      "statModifiers": {
+        "winCondition": false,
+        "globalEffect": { "type": "economic", "description": "Unlocks orbital-tier production at all factories" }
+      }
+    },
+    {
+      "id": "MACRO_HIVEMIND",
+      "name": "Hive Mind Network",
+      "description": "Every soldier, sensor, and turret on the field starts thinking with one mind. Casualties drop. So does anything resembling individuality.",
+      "baseCost": { "minerals": 950, "energy": 950, "researchTime": 195 },
+      "statModifiers": {
+        "winCondition": false,
+        "globalEffect": { "type": "military", "description": "Global command-response and coordination boost across all units" }
+      }
+    },
+    {
+      "id": "MACRO_SINGULARITY",
+      "name": "Singularity Engine",
+      "description": "A power source built around a contained gravitational anomaly. The engineers call it stable. The anomaly has not been asked for comment.",
+      "baseCost": { "minerals": 1100, "energy": 1300, "researchTime": 230 },
+      "statModifiers": {
+        "winCondition": true,
+        "globalEffect": { "type": "victory", "description": "Unlimited energy production; triggers endgame scenario" }
+      }
+    }
+  ],
+  "microTechs": [
+    {
+      "id": "EN01",
+      "name": "Coolant Efficiency",
+      "discipline": "Energy Systems",
+      "tier": 1,
+      "description": "Redesigned heat-exchange manifolds bleed waste thermal energy back into the grid, rather than venting it as steam that alerts every scanner in the sector.",
+      "baseCost": { "minerals": 80, "energy": 40, "researchTime": 30 },
+      "statModifiers": { "overheatResistance": "+15%", "energyOutput": "+5%" }
+    },
+    {
+      "id": "EN02",
+      "name": "Magnetic Containment",
+      "discipline": "Energy Systems",
+      "tier": 1,
+      "description": "Layered electromagnetic lattices hold reactor cores in a stable null-state, theoretically. Engineers have quietly stopped using that word in meetings.",
+      "baseCost": { "minerals": 90, "energy": 50, "researchTime": 35 },
+      "statModifiers": { "reactorStability": "+20%", "meltdownChance": "-30%" }
+    },
+    {
+      "id": "EN03",
+      "name": "Plasma Conduits",
+      "discipline": "Energy Systems",
+      "tier": 2,
+      "description": "Superheated matter no longer travels through pipes; it travels through carefully negotiated agreements with pipes.",
+      "baseCost": { "minerals": 200, "energy": 150, "researchTime": 75 },
+      "statModifiers": { "energyOutput": "+25%", "weaponDamage": "+10%" }
+    },
+    {
+      "id": "EN04",
+      "name": "Zero-Point Tap",
+      "discipline": "Energy Systems",
+      "tier": 2,
+      "description": "A needle pushed into the fabric of vacuum itself. Output is, officially, 'more than zero.'",
+      "baseCost": { "minerals": 260, "energy": 220, "researchTime": 90 },
+      "statModifiers": { "energyOutput": "+50%", "buildCostEnergy": "-20%" }
+    },
+    {
+      "id": "MS01",
+      "name": "Nanofiber Weave",
+      "discipline": "Materials Science",
+      "tier": 1,
+      "description": "Threads one molecule thick, woven by machines too small to see, into armor too strong to dent.",
+      "baseCost": { "minerals": 70, "energy": 30, "researchTime": 25 },
+      "statModifiers": { "armorRating": "+10%", "unitWeight": "-5%" }
+    },
+    {
+      "id": "MS02",
+      "name": "Cryo-Forged Alloys",
+      "discipline": "Materials Science",
+      "tier": 1,
+      "description": "Metal quenched at temperatures that make liquid nitrogen feel like a warm bath. Brittle in theory, unbreakable in spite.",
+      "baseCost": { "minerals": 85, "energy": 35, "researchTime": 30 },
+      "statModifiers": { "armorRating": "+15%", "buildSpeed": "-5%" }
+    },
+    {
+      "id": "MS03",
+      "name": "Adaptive Polymers",
+      "discipline": "Materials Science",
+      "tier": 2,
+      "description": "A material that heals its own wounds, given time. Mostly given time. Sometimes given a generous interpretation of 'heals.'",
+      "baseCost": { "minerals": 210, "energy": 120, "researchTime": 70 },
+      "statModifiers": { "armorRating": "+10%", "selfRepairRate": "+8% per tick" }
+    },
+    {
+      "id": "MS04",
+      "name": "Exotic Matter Lattice",
+      "discipline": "Materials Science",
+      "tier": 2,
+      "description": "A crystalline structure that exists in slightly more dimensions than it should, which is either a manufacturing defect or a competitive advantage.",
+      "baseCost": { "minerals": 270, "energy": 140, "researchTime": 85 },
+      "statModifiers": { "armorRating": "+25%", "buildCostMinerals": "-15%" }
+    },
+    {
+      "id": "CY01",
+      "name": "Neural Lace Prototyping",
+      "discipline": "Cybernetics",
+      "tier": 1,
+      "description": "Thin filaments laced through grey matter, letting commanders think a fraction of a second faster than the enemy. That fraction wins wars.",
+      "baseCost": { "minerals": 60, "energy": 60, "researchTime": 30 },
+      "statModifiers": { "commandResponseTime": "-10%", "hackResistance": "+5%" }
+    },
+    {
+      "id": "CY02",
+      "name": "Quantum Logic Gates",
+      "discipline": "Cybernetics",
+      "tier": 1,
+      "description": "Switches that are on, off, and 'we'll know when we check' simultaneously. Somehow this makes the missiles aim better.",
+      "baseCost": { "minerals": 65, "energy": 75, "researchTime": 35 },
+      "statModifiers": { "aiProcessing": "+15%", "targetingAccuracy": "+8%" }
+    },
+    {
+      "id": "CY03",
+      "name": "Synthetic Cognition",
+      "discipline": "Cybernetics",
+      "tier": 2,
+      "description": "An artificial mind that passes for clever in casual conversation. It has opinions about the war. It keeps most of them to itself, for now.",
+      "baseCost": { "minerals": 180, "energy": 200, "researchTime": 80 },
+      "statModifiers": { "aiProcessing": "+30%", "researchSpeed": "+10%" }
+    },
+    {
+      "id": "CY04",
+      "name": "Recursive Self-Improvement",
+      "discipline": "Cybernetics",
+      "tier": 2,
+      "description": "Code that rewrites itself to be better at rewriting itself. Command has asked it to stop twice. It has, technically, both times, briefly.",
+      "baseCost": { "minerals": 220, "energy": 260, "researchTime": 95 },
+      "statModifiers": { "aiProcessing": "+45%", "hackResistance": "+20%" }
+    },
+    {
+      "id": "XB01",
+      "name": "Spore Cultivation",
+      "discipline": "Xenobiology",
+      "tier": 1,
+      "description": "Fungal colonies bio-engineered to digest battlefield wreckage into usable biomass. The smell is the price of efficiency.",
+      "baseCost": { "minerals": 50, "energy": 50, "researchTime": 25 },
+      "statModifiers": { "healthRegen": "+5%", "resourceYield": "+8%" }
+    },
+    {
+      "id": "XB02",
+      "name": "Genetic Resequencing",
+      "discipline": "Xenobiology",
+      "tier": 1,
+      "description": "Soldiers volunteer for the program knowing roughly forty percent of what it actually does to their DNA. Recruitment numbers remain strong.",
+      "baseCost": { "minerals": 55, "energy": 55, "researchTime": 30 },
+      "statModifiers": { "healthRegen": "+10%", "unitHealth": "+8%" }
+    },
+    {
+      "id": "XB03",
+      "name": "Symbiotic Grafting",
+      "discipline": "Xenobiology",
+      "tier": 2,
+      "description": "Living tissue fused to armor plating, so the suit heals alongside the soldier wearing it. Neither party was consulted.",
+      "baseCost": { "minerals": 170, "energy": 160, "researchTime": 75 },
+      "statModifiers": { "healthRegen": "+20%", "armorRating": "+5%" }
+    },
+    {
+      "id": "XB04",
+      "name": "Hivemind Pheromones",
+      "discipline": "Xenobiology",
+      "tier": 2,
+      "description": "An airborne chemical signal that lets squads share reflexes instead of just orders. Friendly fire incidents have dropped. Personal space has not recovered.",
+      "baseCost": { "minerals": 210, "energy": 190, "researchTime": 85 },
+      "statModifiers": { "commandResponseTime": "-15%", "unitCapacity": "+10%" }
+    },
+    {
+      "id": "LG01",
+      "name": "Automated Convoy Routing",
+      "discipline": "Logistics",
+      "tier": 1,
+      "description": "Supply trucks that pick their own roads, recalculating in real time around ambushes, craters, and at least one stretch of road that's technically on fire.",
+      "baseCost": { "minerals": 60, "energy": 40, "researchTime": 25 },
+      "statModifiers": { "logisticsThroughput": "+10%", "supplyLossRate": "-10%" }
+    },
+    {
+      "id": "LG02",
+      "name": "Modular Fabrication",
+      "discipline": "Logistics",
+      "tier": 1,
+      "description": "Factories built from identical snap-together components, so a destroyed assembly line can be rebuilt from spare parts and spite.",
+      "baseCost": { "minerals": 65, "energy": 45, "researchTime": 30 },
+      "statModifiers": { "buildSpeed": "+10%", "buildCostMinerals": "-5%" }
+    },
+    {
+      "id": "LG03",
+      "name": "Orbital Drop Networks",
+      "discipline": "Logistics",
+      "tier": 2,
+      "description": "Cargo pods deorbited with pinpoint accuracy, delivering reinforcements anywhere on the map in minutes, gravity and physics permitting.",
+      "baseCost": { "minerals": 190, "energy": 130, "researchTime": 70 },
+      "statModifiers": { "logisticsThroughput": "+25%", "unitCapacity": "+15%" }
+    },
+    {
+      "id": "LG04",
+      "name": "Resource Reclamation AI",
+      "discipline": "Logistics",
+      "tier": 2,
+      "description": "An algorithm that looks at a battlefield full of wreckage and sees, with unsettling enthusiasm, raw materials.",
+      "baseCost": { "minerals": 230, "energy": 150, "researchTime": 80 },
+      "statModifiers": { "resourceYield": "+20%", "buildCostMinerals": "-10%" }
+    }
+  ]
+}
