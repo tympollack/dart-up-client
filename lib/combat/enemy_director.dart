@@ -364,14 +364,18 @@ class EnemyDirector {
   double _fleetCentroidX() {
     if (squadCount == 0) return 0;
     double sum = 0;
-    for (int i = 0; i < squadCount; i++) sum += posX[i];
+    for (int i = 0; i < squadCount; i++) {
+      sum += posX[i];
+    }
     return sum / squadCount;
   }
 
   double _fleetCentroidY() {
     if (squadCount == 0) return 0;
     double sum = 0;
-    for (int i = 0; i < squadCount; i++) sum += posY[i];
+    for (int i = 0; i < squadCount; i++) {
+      sum += posY[i];
+    }
     return sum / squadCount;
   }
 }

@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 class HubClient {
@@ -21,7 +22,7 @@ class HubClient {
     required int moves,
   }) async {
     if (accessToken == null) {
-      print('No access token available. Cannot post match result.');
+      debugPrint('No access token available. Cannot post match result.');
       return;
     }
 
@@ -43,12 +44,12 @@ class HubClient {
       );
 
       if (response.statusCode == 200) {
-        print('Successfully synced match to Hub!');
+        debugPrint('Successfully synced match to Hub!');
       } else {
-        print('Failed to sync match. Status: ${response.statusCode}, Body: ${response.body}');
+        debugPrint('Failed to sync match. Status: ${response.statusCode}, Body: ${response.body}');
       }
     } catch (e) {
-      print('Error posting match result: $e');
+      debugPrint('Error posting match result: $e');
     }
   }
 }

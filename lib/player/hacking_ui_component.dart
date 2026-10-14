@@ -37,7 +37,7 @@ class HackingUIComponent extends PositionComponent {
     final Paint glowPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 14.0
-      ..color = _ringColor.withOpacity(0.15 + power * 0.55)
+      ..color = _ringColor.withValues(alpha: (0.15 + power * 0.55).clamp(0.0, 1.0))
       ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 10.0);
     canvas.drawCircle(center, vis.radius, glowPaint);
 
@@ -46,7 +46,7 @@ class HackingUIComponent extends PositionComponent {
     final Paint ringPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 3.0
-      ..color = _ringColor.withOpacity(0.5 + power * 0.5);
+      ..color = _ringColor.withValues(alpha: (0.5 + power * 0.5).clamp(0.0, 1.0));
     canvas.drawCircle(center, vis.radius, ringPaint);
   }
 }

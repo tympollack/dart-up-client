@@ -95,7 +95,7 @@ class StarDartMVP extends FlameGame with TapCallbacks {
   }
 
   void endMatch() {
-    print("Ending match and syncing to Hub...");
+    debugPrint("Ending match and syncing to Hub...");
     HubClient.postMatchResult(
       gameName: 'Star Dart',
       opponentName: 'Swarm Director',
