@@ -55,44 +55,49 @@ class SquadUnitComponent extends PositionComponent {
     super.update(dt);
     _exhaustTimer += dt;
 
-    if (!isMoving || _currentWaypointIndex >= waypoints.length) {
-      isMoving = false;
-      return;
-    }
+    double remainingBudget = speed * dt;
 
-    final targetPoint = waypoints[_currentWaypointIndex];
-    final toTarget = targetPoint - position;
-    final dist = toTarget.length;
+    while (remainingBudget > 0.0 && _currentWaypointIndex < waypoints.length) {
+      final targetPoint = waypoints[_currentWaypointIndex];
+      final toTarget = targetPoint - position;
+      final dist = toTarget.length;
 
-    final direction = toTarget.normalized();
-    final double moveStep = speed * dt;
-    const double arrivalThreshold = 4.0;
-
-    // Check waypoint arrival threshold or step overshoot
-    if (dist <= moveStep || dist <= arrivalThreshold) {
-      position.setFrom(targetPoint);
-      _currentWaypointIndex++;
-      if (_currentWaypointIndex >= waypoints.length) {
-        isMoving = false;
-        return;
+      // Skip zero-distance waypoints without consuming budget
+      if (dist <= 0.001) {
+        position.setFrom(targetPoint);
+        _currentWaypointIndex++;
+        continue;
       }
-    } else {
-      // Advance position
-      position += direction * moveStep;
+
+      final direction = toTarget / dist;
+      final double desiredHeading = atan2(direction.y, direction.x);
+
+      // Smooth heading steering towards current segment direction
+      double diff = (desiredHeading - heading) % (2.0 * pi);
+      if (diff > pi) diff -= 2.0 * pi;
+      if (diff < -pi) diff += 2.0 * pi;
+
+      final double turnStep = turnRate * dt;
+      if (diff.abs() <= turnStep) {
+        heading = desiredHeading;
+      } else {
+        heading += diff.sign * turnStep;
+      }
+
+      if (dist <= remainingBudget) {
+        // Waypoint reached: advance position and apply remainder to next segment
+        position.setFrom(targetPoint);
+        remainingBudget -= dist;
+        _currentWaypointIndex++;
+      } else {
+        // Advance along current segment and exhaust remaining budget
+        position += direction * remainingBudget;
+        remainingBudget = 0.0;
+      }
     }
 
-    final double desiredHeading = atan2(direction.y, direction.x);
-
-    // Smooth heading steering
-    double diff = (desiredHeading - heading) % (2.0 * pi);
-    if (diff > pi) diff -= 2.0 * pi;
-    if (diff < -pi) diff += 2.0 * pi;
-
-    final double turnStep = turnRate * dt;
-    if (diff.abs() <= turnStep) {
-      heading = desiredHeading;
-    } else {
-      heading += diff.sign * turnStep;
+    if (_currentWaypointIndex >= waypoints.length) {
+      isMoving = false;
     }
   }
 

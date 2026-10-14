@@ -1,6 +1,7 @@
 import 'dart:math';
 import 'package:flame/components.dart';
 import 'package:flame/game.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sd_client/game/grid_layer.dart';
 import 'package:sd_client/game/entities/entities.dart';
@@ -80,6 +81,25 @@ void main() {
       expect(alpha, isNotNull);
       expect(alpha!.isActive, isTrue);
       expect(alpha.connectedNodeIds, contains('node-beta'));
+    });
+
+    test('Same-tile path returns empty if tile is impassable or off-map', () {
+      final grid = TacticalHexGrid(hexRadius: 40.0);
+      grid.tiles[const HexCoord(0, 0)] = const HexTile(
+        coord: HexCoord(0, 0),
+        terrain: HexTerrainType.voidChasm,
+      );
+
+      // Same tile but impassable
+      expect(grid.findPath(const HexCoord(0, 0), const HexCoord(0, 0)), isEmpty);
+      // Off-map tile
+      expect(grid.findPath(const HexCoord(99, 99), const HexCoord(99, 99)), isEmpty);
+      // Valid passable tile
+      grid.tiles[const HexCoord(1, 1)] = const HexTile(
+        coord: HexCoord(1, 1),
+        terrain: HexTerrainType.plains,
+      );
+      expect(grid.findPath(const HexCoord(1, 1), const HexCoord(1, 1)), equals([const HexCoord(1, 1)]));
     });
   });
 
@@ -182,13 +202,35 @@ void main() {
 
       expect(rtsComponent.turrets.length, equals(2));
       expect(rtsComponent.harvesters.length, equals(1));
-      expect(rtsComponent.squadUnits.length, equals(1));
+      expect(rtsComponent.squadUnits.length, equals(2)); // friendly + hostile
 
-      // Check turret tracking squad unit in update
+      // Friendly squad is at index 0 (cyan), hostile squad is at index 1 (crimson)
+      final friendly = rtsComponent.squadUnits[0];
+      final hostile = rtsComponent.squadUnits[1];
+      expect(friendly.factionColor, equals(const Color(0xFF00E5FF)));
+      expect(hostile.factionColor, equals(const Color(0xFFEF4444)));
+
+      // Check turret tracking: turrets only target hostile units, NEVER friendly units
       rtsComponent.update(0.1);
       for (final turret in rtsComponent.turrets) {
-        expect(turret.targetPosition, equals(rtsComponent.squadUnits.first.position));
+        expect(turret.targetPosition, isNot(equals(friendly.position)));
+        if (turret.targetPosition != null) {
+          expect(turret.targetPosition, equals(hostile.position));
+        }
       }
+    });
+
+    test('Translates tap events and moves friendly squad', () async {
+      final rtsComponent = TacticalRTSComponent();
+      await rtsComponent.onLoad();
+
+      final friendly = rtsComponent.squadUnits[0];
+      final originalWaypoints = List<Vector2>.from(friendly.waypoints);
+
+      // Command move to a different hex
+      rtsComponent.commandMoveTo(const HexCoord(0, 0));
+      expect(friendly.waypoints, isNot(equals(originalWaypoints)));
+      expect(friendly.isMoving, isTrue);
     });
   });
 }

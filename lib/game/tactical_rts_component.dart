@@ -7,7 +7,7 @@ import 'grid_layer.dart';
 
 /// Complete tactical RTS game subsystem integrating hex terrain,
 /// logistics tether power networks, defensive turrets, harvesters, and squad units.
-class TacticalRTSComponent extends Component with TapCallbacks {
+class TacticalRTSComponent extends PositionComponent with TapCallbacks {
   final TacticalHexGrid grid;
   late final HexGridComponent gridComponent;
   final List<DefensiveTurretComponent> turrets = [];
@@ -16,7 +16,8 @@ class TacticalRTSComponent extends Component with TapCallbacks {
 
   TacticalRTSComponent({
     TacticalHexGrid? grid,
-  }) : grid = grid ?? TacticalHexGrid.createDefaultMap();
+  })  : grid = grid ?? TacticalHexGrid.createDefaultMap(),
+        super(anchor: Anchor.center);
 
   @override
   Future<void> onLoad() async {
@@ -26,7 +27,7 @@ class TacticalRTSComponent extends Component with TapCallbacks {
     gridComponent = HexGridComponent(grid: grid);
     await add(gridComponent);
 
-    // 2. Defensive Turret Platforms at strategic choke points
+    // 2. Defensive Turret Platforms at strategic choke points (Friendly Faction: Cyan)
     final turret1 = DefensiveTurretComponent(
       position: const HexCoord(1, 0).toWorld(grid.hexRadius),
       range: 240.0,
@@ -50,55 +51,86 @@ class TacticalRTSComponent extends Component with TapCallbacks {
     harvesters.add(harvester);
     await add(harvester);
 
-    // 4. Combat Squad Unit navigating tactical waypoints
+    // 4. Friendly Squad Unit (SunShade Cyan)
     final startCoord = const HexCoord(-3, 0);
     final goalCoord = const HexCoord(3, -1);
 
-    final squadUnit = SquadUnitComponent(
+    final friendlySquad = SquadUnitComponent(
       position: startCoord.toWorld(grid.hexRadius),
       speed: 120.0,
       factionColor: const Color(0xFF00E5FF),
       unitName: 'Vanguard Raider',
     );
-
-    // Calculate initial pathfinding waypoints avoiding obstacles
     final waypoints = grid.findWaypoints(startCoord, goalCoord);
-    squadUnit.setWaypoints(waypoints);
+    friendlySquad.setWaypoints(waypoints);
+    squadUnits.add(friendlySquad);
+    await add(friendlySquad);
 
-    squadUnits.add(squadUnit);
-    await add(squadUnit);
+    // 5. Hostile Squad Unit (Enemy Crimson) - target for defensive turrets
+    final enemyCoord = const HexCoord(2, -2);
+    final enemyPatrolGoal = const HexCoord(0, 1);
+
+    final hostileSquad = SquadUnitComponent(
+      position: enemyCoord.toWorld(grid.hexRadius),
+      speed: 90.0,
+      factionColor: const Color(0xFFEF4444),
+      unitName: 'Corsair Marauder',
+    );
+    final enemyWaypoints = grid.findWaypoints(enemyCoord, enemyPatrolGoal);
+    hostileSquad.setWaypoints(enemyWaypoints);
+    squadUnits.add(hostileSquad);
+    await add(hostileSquad);
   }
 
   @override
   void update(double dt) {
     super.update(dt);
 
-    // Turrets dynamically acquire nearest squad unit heading
-    if (squadUnits.isNotEmpty) {
-      final targetUnit = squadUnits.first;
-      for (final turret in turrets) {
-        turret.setTarget(targetUnit.position);
+    // Defensive towers acquire only hostile (opposing-faction) targets within range
+    for (final turret in turrets) {
+      SquadUnitComponent? bestTarget;
+      double closestDist = double.infinity;
+
+      for (final unit in squadUnits) {
+        // Only target units belonging to opposing faction
+        if (unit.factionColor == turret.factionColor) continue;
+
+        final dist = (unit.position - turret.position).length;
+        if (dist <= turret.range && dist < closestDist) {
+          closestDist = dist;
+          bestTarget = unit;
+        }
       }
+
+      // If hostile unit in range, lock on; otherwise clear target to resume idle scanning
+      turret.setTarget(bestTarget?.position);
     }
   }
 
-  /// Command active squad unit to navigate to target hex coordinate
+  /// Command friendly squad unit(s) to navigate to target hex coordinate
   void commandMoveTo(HexCoord targetCoord) {
-    if (squadUnits.isEmpty) return;
-
-    final unit = squadUnits.first;
-    final currentHex = HexCoord.fromWorld(unit.position, grid.hexRadius);
-    final waypoints = grid.findWaypoints(currentHex, targetCoord);
-
-    if (waypoints.isNotEmpty) {
-      unit.setWaypoints(waypoints);
+    for (final unit in squadUnits) {
+      // Only command friendly units
+      if (unit.factionColor == const Color(0xFF00E5FF)) {
+        final currentHex = HexCoord.fromWorld(unit.position, grid.hexRadius);
+        final waypoints = grid.findWaypoints(currentHex, targetCoord);
+        if (waypoints.isNotEmpty) {
+          unit.setWaypoints(waypoints);
+        }
+      }
     }
   }
 
   @override
   void onTapDown(TapDownEvent event) {
-    // Tap anywhere on canvas to navigate squad unit to nearest hex
-    final targetHex = HexCoord.fromWorld(event.canvasPosition, grid.hexRadius);
+    // Translate tap position into world coordinates respecting camera pan & zoom
+    Vector2 worldPoint = event.localPosition;
+    final game = findGame();
+    if (game != null) {
+      worldPoint = game.camera.globalToLocal(event.canvasPosition);
+    }
+
+    final targetHex = HexCoord.fromWorld(worldPoint, grid.hexRadius);
     commandMoveTo(targetHex);
   }
 }

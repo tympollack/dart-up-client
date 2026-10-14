@@ -226,19 +226,18 @@ class TacticalHexGrid {
 
   /// A* Pathfinding across hex grid returning sequential tile coordinates
   List<HexCoord> findPath(HexCoord start, HexCoord goal) {
-    if (start == goal) return [start];
     if (!tiles.containsKey(start) || !tiles.containsKey(goal)) return [];
-    if (!tiles[goal]!.isPassable) return [];
+    if (!tiles[start]!.isPassable || !tiles[goal]!.isPassable) return [];
+    if (start == goal) return [start];
 
     final frontier = <_PathNode>[];
     final Map<HexCoord, HexCoord> cameFrom = {};
     final Map<HexCoord, double> gScore = {start: 0.0};
 
-    frontier.add(_PathNode(start, 0.0, start.distanceTo(goal).toDouble()));
+    _insertFrontier(frontier, _PathNode(start, 0.0, start.distanceTo(goal).toDouble()));
 
     while (frontier.isNotEmpty) {
-      frontier.sort((a, b) => a.fScore.compareTo(b.fScore));
-      final current = frontier.removeAt(0).coord;
+      final current = frontier.removeLast().coord;
 
       if (current == goal) {
         // Reconstruct path
@@ -261,12 +260,27 @@ class TacticalHexGrid {
           cameFrom[next] = current;
           gScore[next] = tentativeG;
           final fScore = tentativeG + next.distanceTo(goal) * 1.0;
-          frontier.add(_PathNode(next, tentativeG, fScore));
+          _insertFrontier(frontier, _PathNode(next, tentativeG, fScore));
         }
       }
     }
 
     return []; // No path found
+  }
+
+  static void _insertFrontier(List<_PathNode> list, _PathNode node) {
+    int low = 0;
+    int high = list.length;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      // Store descending so removeLast() pops the lowest fScore in O(1)
+      if (list[mid].fScore >= node.fScore) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    list.insert(low, node);
   }
 
   /// Path converted to world coordinate waypoints
