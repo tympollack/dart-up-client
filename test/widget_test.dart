@@ -16,6 +16,6 @@ void main() {
     await tester.pumpWidget(GameWidget(game: StarDartMVP()));
 
     // Verify that the game loaded without errors.
-    expect(find.byType(GameWidget), findsOneWidget);
+    expect(find.byType(GameWidget<StarDartMVP>), findsOneWidget);
   });
 }
