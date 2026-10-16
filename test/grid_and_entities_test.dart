@@ -177,6 +177,30 @@ void main() {
       expect(unit.isMoving, isFalse);
     });
 
+    test('SquadUnitComponent does not snap heading when receiving mid-movement orders', () {
+      final unit = SquadUnitComponent(
+        position: Vector2(0, 0),
+        speed: 100.0,
+        turnRate: 1.0, // 1 rad/s
+      );
+
+      // Initial command while stationary initializes heading to east (0.0 rad)
+      unit.setWaypoints([Vector2(100, 0)]);
+      expect(unit.heading, closeTo(0.0, 0.001));
+
+      // Advance 0.5s so unit is actively moving
+      unit.update(0.5);
+      expect(unit.isMoving, isTrue);
+
+      // Mid-movement order in opposite direction must NOT snap heading instantly to pi
+      unit.setWaypoints([Vector2(-100, 0)]);
+      expect(unit.heading, closeTo(0.0, 0.001));
+
+      // Update 0.1s -> turns smoothly by turnRate * dt = 0.1 rad
+      unit.update(0.1);
+      expect(unit.heading.abs(), closeTo(0.1, 0.05));
+    });
+
     test('ResourceHarvesterComponent accumulates cargo over time', () {
       final harvester = ResourceHarvesterComponent(
         position: Vector2(200, 200),
@@ -231,6 +255,21 @@ void main() {
       rtsComponent.commandMoveTo(const HexCoord(0, 0));
       expect(friendly.waypoints, isNot(equals(originalWaypoints)));
       expect(friendly.isMoving, isTrue);
+    });
+
+    test('Has non-zero hit test bounds and initializes custom radius maps safely', () async {
+      final customGrid = TacticalHexGrid.createDefaultMap(radius: 2);
+      final rtsComponent = TacticalRTSComponent(grid: customGrid);
+      expect(rtsComponent.size.x, greaterThan(0.0));
+      expect(rtsComponent.size.y, greaterThan(0.0));
+
+      await rtsComponent.onLoad();
+      expect(rtsComponent.squadUnits.isNotEmpty, isTrue);
+      // Ensure all spawned entities are located on valid grid tiles
+      for (final squad in rtsComponent.squadUnits) {
+        final hex = HexCoord.fromWorld(squad.position, customGrid.hexRadius);
+        expect(customGrid.tiles.containsKey(hex), isTrue);
+      }
     });
   });
 }

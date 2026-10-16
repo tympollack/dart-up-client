@@ -99,9 +99,13 @@ class StarDartMVP extends FlameGame with TapCallbacks {
   void onTapDown(TapDownEvent event) {
     final worldTapCoordinate = gameCamera.globalToLocal(event.canvasPosition);
     playerShip.setTarget(worldTapCoordinate);
-    tacticalRTS.commandMoveTo(
-      HexCoord.fromWorld(worldTapCoordinate, tacticalRTS.grid.hexRadius),
-    );
+
+    // Only forward squad movement orders if the tap coordinate falls on the tactical hex grid
+    final hexCoord =
+        HexCoord.fromWorld(worldTapCoordinate, tacticalRTS.grid.hexRadius);
+    if (tacticalRTS.grid.tiles.containsKey(hexCoord)) {
+      tacticalRTS.commandMoveTo(hexCoord);
+    }
   }
 
   void endMatch() {
