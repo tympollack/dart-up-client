@@ -177,6 +177,30 @@ void main() {
       expect(unit.isMoving, isFalse);
     });
 
+    test('SquadUnitComponent does not snap heading when receiving mid-movement orders', () {
+      final unit = SquadUnitComponent(
+        position: Vector2(0, 0),
+        speed: 100.0,
+        turnRate: 1.0, // 1 rad/s
+      );
+
+      // Initial command while stationary initializes heading to east (0.0 rad)
+      unit.setWaypoints([Vector2(100, 0)]);
+      expect(unit.heading, closeTo(0.0, 0.001));
+
+      // Advance 0.5s so unit is actively moving
+      unit.update(0.5);
+      expect(unit.isMoving, isTrue);
+
+      // Mid-movement order in opposite direction must NOT snap heading instantly to pi
+      unit.setWaypoints([Vector2(-100, 0)]);
+      expect(unit.heading, closeTo(0.0, 0.001));
+
+      // Update 0.1s -> turns smoothly by turnRate * dt = 0.1 rad
+      unit.update(0.1);
+      expect(unit.heading.abs(), closeTo(0.1, 0.05));
+    });
+
     test('ResourceHarvesterComponent accumulates cargo over time', () {
       final harvester = ResourceHarvesterComponent(
         position: Vector2(200, 200),

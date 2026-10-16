@@ -34,8 +34,10 @@ class SquadUnitComponent extends PositionComponent {
   void setWaypoints(List<Vector2> newWaypoints) {
     waypoints = List.from(newWaypoints);
     _currentWaypointIndex = 0;
+    final wasMoving = isMoving;
     isMoving = waypoints.isNotEmpty;
-    if (waypoints.isNotEmpty && (waypoints.first - position).length > 0.001) {
+    // Only snap initial heading if unit was stationary; moving units steer smoothly at turnRate
+    if (!wasMoving && waypoints.isNotEmpty && (waypoints.first - position).length > 0.001) {
       final toFirst = waypoints.first - position;
       heading = atan2(toFirst.y, toFirst.x);
     }
@@ -88,8 +90,9 @@ class SquadUnitComponent extends PositionComponent {
         heading += diff.sign * turnStep;
       }
 
-      // Forward movement scales with heading alignment to avoid crabbing sideways
-      final double alignmentFactor = max(0.0, cos(diff));
+      // Forward movement scales with heading alignment to avoid crabbing sideways,
+      // while guaranteeing minimum forward headway so sharp turns do not stall completely
+      final double alignmentFactor = max(0.15, cos(diff));
       final double effectiveStep = remainingBudget * alignmentFactor;
 
       if (dist <= effectiveStep) {

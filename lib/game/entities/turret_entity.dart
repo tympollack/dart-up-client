@@ -178,7 +178,7 @@ class DefensiveTurretComponent extends PositionComponent {
         laserPaint,
       );
 
-      // Target reticle pip at laser end
+      // Laser beam endpoint pip projected along barrel bore axis
       final reticlePaint = Paint()
         ..color = Colors.white
         ..style = PaintingStyle.fill;
