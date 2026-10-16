@@ -232,5 +232,20 @@ void main() {
       expect(friendly.waypoints, isNot(equals(originalWaypoints)));
       expect(friendly.isMoving, isTrue);
     });
+
+    test('Has non-zero hit test bounds and initializes custom radius maps safely', () async {
+      final customGrid = TacticalHexGrid.createDefaultMap(radius: 2);
+      final rtsComponent = TacticalRTSComponent(grid: customGrid);
+      expect(rtsComponent.size.x, greaterThan(0.0));
+      expect(rtsComponent.size.y, greaterThan(0.0));
+
+      await rtsComponent.onLoad();
+      expect(rtsComponent.squadUnits.isNotEmpty, isTrue);
+      // Ensure all spawned entities are located on valid grid tiles
+      for (final squad in rtsComponent.squadUnits) {
+        final hex = HexCoord.fromWorld(squad.position, customGrid.hexRadius);
+        expect(customGrid.tiles.containsKey(hex), isTrue);
+      }
+    });
   });
 }

@@ -17,7 +17,16 @@ class TacticalRTSComponent extends PositionComponent with TapCallbacks {
   TacticalRTSComponent({
     TacticalHexGrid? grid,
   })  : grid = grid ?? TacticalHexGrid.createDefaultMap(),
-        super(anchor: Anchor.center);
+        super(anchor: Anchor.center) {
+    double maxCoordDist = 5.0;
+    if (this.grid.tiles.isNotEmpty) {
+      maxCoordDist = this.grid.tiles.keys
+          .map((c) => (c.q.abs() + c.r.abs() + c.s.abs()) / 2.0)
+          .reduce((a, b) => a > b ? a : b);
+    }
+    final double span = (maxCoordDist + 1) * this.grid.hexRadius * 2.0;
+    size = Vector2(span * 2, span * 2);
+  }
 
   @override
   Future<void> onLoad() async {
@@ -27,14 +36,28 @@ class TacticalRTSComponent extends PositionComponent with TapCallbacks {
     gridComponent = HexGridComponent(grid: grid);
     await add(gridComponent);
 
+    // Collect passable tiles for coordinate resolution (supports custom/smaller maps)
+    final passableTiles =
+        grid.tiles.values.where((t) => t.isPassable).map((t) => t.coord).toList();
+    if (passableTiles.isEmpty) return;
+
+    HexCoord resolveCoord(HexCoord preferred, [int fallbackIndex = 0]) {
+      if (grid.tiles[preferred]?.isPassable == true) {
+        return preferred;
+      }
+      return passableTiles[fallbackIndex % passableTiles.length];
+    }
+
     // 2. Defensive Turret Platforms at strategic choke points (Friendly Faction: Cyan)
+    final t1Coord = resolveCoord(const HexCoord(1, 0), 0);
+    final t2Coord = resolveCoord(const HexCoord(-1, 1), 1);
     final turret1 = DefensiveTurretComponent(
-      position: const HexCoord(1, 0).toWorld(grid.hexRadius),
+      position: t1Coord.toWorld(grid.hexRadius),
       range: 240.0,
       factionColor: const Color(0xFF00E5FF),
     );
     final turret2 = DefensiveTurretComponent(
-      position: const HexCoord(-1, 1).toWorld(grid.hexRadius),
+      position: t2Coord.toWorld(grid.hexRadius),
       range: 240.0,
       factionColor: const Color(0xFF00E5FF),
     );
@@ -42,8 +65,9 @@ class TacticalRTSComponent extends PositionComponent with TapCallbacks {
     await addAll(turrets);
 
     // 3. Resource Harvester at crystal crater
+    final harvesterCoord = resolveCoord(const HexCoord(0, 3), 2);
     final harvester = ResourceHarvesterComponent(
-      position: const HexCoord(0, 3).toWorld(grid.hexRadius),
+      position: harvesterCoord.toWorld(grid.hexRadius),
       cargoCapacity: 150.0,
       currentCargo: 40.0,
       isHarvesting: true,
@@ -52,8 +76,8 @@ class TacticalRTSComponent extends PositionComponent with TapCallbacks {
     await add(harvester);
 
     // 4. Friendly Squad Unit (SunShade Cyan)
-    final startCoord = const HexCoord(-3, 0);
-    final goalCoord = const HexCoord(3, -1);
+    final startCoord = resolveCoord(const HexCoord(-3, 0), 0);
+    final goalCoord = resolveCoord(const HexCoord(3, -1), passableTiles.length - 1);
 
     final friendlySquad = SquadUnitComponent(
       position: startCoord.toWorld(grid.hexRadius),
@@ -67,8 +91,9 @@ class TacticalRTSComponent extends PositionComponent with TapCallbacks {
     await add(friendlySquad);
 
     // 5. Hostile Squad Unit (Enemy Crimson) - target for defensive turrets
-    final enemyCoord = const HexCoord(2, -2);
-    final enemyPatrolGoal = const HexCoord(0, 1);
+    final enemyCoord = resolveCoord(const HexCoord(2, -2), passableTiles.length ~/ 2);
+    final enemyPatrolGoal =
+        resolveCoord(const HexCoord(0, 1), (passableTiles.length ~/ 2) + 1);
 
     final hostileSquad = SquadUnitComponent(
       position: enemyCoord.toWorld(grid.hexRadius),
@@ -124,7 +149,7 @@ class TacticalRTSComponent extends PositionComponent with TapCallbacks {
   @override
   void onTapDown(TapDownEvent event) {
     // Translate tap position into world coordinates respecting camera pan & zoom
-    Vector2 worldPoint = event.localPosition;
+    Vector2 worldPoint = event.localPosition - size / 2.0;
     final game = findGame();
     if (game != null) {
       worldPoint = game.camera.globalToLocal(event.canvasPosition);

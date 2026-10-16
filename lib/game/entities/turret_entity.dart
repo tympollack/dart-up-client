@@ -166,14 +166,15 @@ class DefensiveTurretComponent extends PositionComponent {
     canvas.drawCircle(Offset.zero, 4.5, corePaint);
 
     // Active targeting laser sight when target locked
-    if (isAcquiringTarget) {
+    if (isAcquiringTarget && targetPosition != null) {
+      final double sightDistance = (targetPosition! - position).length;
       final laserPaint = Paint()
         ..color = factionColor.withValues(alpha: 0.6 + 0.3 * sin(_energyPulseTimer * 10.0))
         ..style = PaintingStyle.stroke
         ..strokeWidth = 1.2;
       canvas.drawLine(
         Offset.zero,
-        const Offset(180, 0),
+        Offset(sightDistance, 0),
         laserPaint,
       );
 
@@ -181,7 +182,7 @@ class DefensiveTurretComponent extends PositionComponent {
       final reticlePaint = Paint()
         ..color = Colors.white
         ..style = PaintingStyle.fill;
-      canvas.drawCircle(const Offset(180, 0), 2.5, reticlePaint);
+      canvas.drawCircle(Offset(sightDistance, 0), 2.5, reticlePaint);
     }
 
     canvas.restore();

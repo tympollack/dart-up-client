@@ -35,6 +35,10 @@ class SquadUnitComponent extends PositionComponent {
     waypoints = List.from(newWaypoints);
     _currentWaypointIndex = 0;
     isMoving = waypoints.isNotEmpty;
+    if (waypoints.isNotEmpty && (waypoints.first - position).length > 0.001) {
+      final toFirst = waypoints.first - position;
+      heading = atan2(toFirst.y, toFirst.x);
+    }
   }
 
   /// Add a single waypoint to current navigation queue
@@ -84,14 +88,18 @@ class SquadUnitComponent extends PositionComponent {
         heading += diff.sign * turnStep;
       }
 
-      if (dist <= remainingBudget) {
+      // Forward movement scales with heading alignment to avoid crabbing sideways
+      final double alignmentFactor = max(0.0, cos(diff));
+      final double effectiveStep = remainingBudget * alignmentFactor;
+
+      if (dist <= effectiveStep) {
         // Waypoint reached: advance position and apply remainder to next segment
         position.setFrom(targetPoint);
         remainingBudget -= dist;
         _currentWaypointIndex++;
       } else {
         // Advance along current segment and exhaust remaining budget
-        position += direction * remainingBudget;
+        position += direction * effectiveStep;
         remainingBudget = 0.0;
       }
     }
