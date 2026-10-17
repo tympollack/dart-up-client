@@ -7,6 +7,8 @@ import 'package:flame/particles.dart';
 
 import 'package:sd_client/swarm/swarm_manager.dart'; // NEW: Import our Boids engine
 import 'package:sd_client/hub/hub_client.dart'; // Hub integration
+import 'package:sd_client/game/grid_layer.dart';
+import 'package:sd_client/game/tactical_rts_component.dart';
 
 void main() {
   HubClient.initializeFromUrl(Uri.base);
@@ -40,6 +42,7 @@ void main() {
 class StarDartMVP extends FlameGame with TapCallbacks {
   late Ship playerShip;
   late SwarmManager droneSwarm; // NEW: The Swarm!
+  late TacticalRTSComponent tacticalRTS; // NEW: Kenney RTS Tactical Subsystem!
   
   late final World gameWorld;
   late final CameraComponent gameCamera;
@@ -56,14 +59,18 @@ class StarDartMVP extends FlameGame with TapCallbacks {
     final starfield = Starfield(starCount: 500, fieldRadius: 3000);
     gameWorld.add(starfield);
 
-    // 2. SPAWN THE SHIP
+    // 2. SPAWN THE TACTICAL RTS SUBSYSTEM (Kenney hex grid, turrets, harvesters, squad units)
+    tacticalRTS = TacticalRTSComponent();
+    gameWorld.add(tacticalRTS);
+
+    // 3. SPAWN THE SHIP
     playerShip = Ship()
       ..position = Vector2.zero() 
       ..size = Vector2(40, 50)
       ..anchor = Anchor.center;
     gameWorld.add(playerShip);
 
-    // 3. SPAWN THE SWARM
+    // 4. SPAWN THE SWARM
     droneSwarm = SwarmManager(
       unitCount: 300, // 300 drones protecting your ship!
       targetCoordinate: playerShip.position, 
@@ -72,7 +79,7 @@ class StarDartMVP extends FlameGame with TapCallbacks {
     );
     gameWorld.add(droneSwarm); // Add it to the infinite world
 
-    // 4. SET UP THE CAMERA
+    // 5. SET UP THE CAMERA
     gameCamera = CameraComponent(world: gameWorld)
       ..follow(playerShip); 
     add(gameCamera);
@@ -92,10 +99,17 @@ class StarDartMVP extends FlameGame with TapCallbacks {
   void onTapDown(TapDownEvent event) {
     final worldTapCoordinate = gameCamera.globalToLocal(event.canvasPosition);
     playerShip.setTarget(worldTapCoordinate);
+
+    // Only forward squad movement orders if the tap coordinate falls on the tactical hex grid
+    final hexCoord =
+        HexCoord.fromWorld(worldTapCoordinate, tacticalRTS.grid.hexRadius);
+    if (tacticalRTS.grid.tiles.containsKey(hexCoord)) {
+      tacticalRTS.commandMoveTo(hexCoord);
+    }
   }
 
   void endMatch() {
-    print("Ending match and syncing to Hub...");
+    debugPrint("Ending match and syncing to Hub...");
     HubClient.postMatchResult(
       gameName: 'Star Dart',
       opponentName: 'Swarm Director',

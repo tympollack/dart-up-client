@@ -17,7 +17,6 @@ import 'dart:isolate';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:flame/components.dart';
 import 'package:flame/events.dart';
 import 'package:flame/game.dart';
 
@@ -159,6 +158,8 @@ class DartUpGame extends FlameGame with TapCallbacks {
   void onRemove() {
     _swarmCommandPort?.send(kShutdownCommand);
     _swarmReceivePort?.close();
+    _swarmIsolate?.kill(priority: Isolate.immediate);
+    _swarmIsolate = null;
     super.onRemove();
   }
 

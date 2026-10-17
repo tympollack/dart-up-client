@@ -80,7 +80,7 @@ class CombatVFXComponent extends PositionComponent {
     for (final _ActiveStrike strike in _strikes) {
       final double t = (strike.timeRemaining / strike.totalDuration).clamp(0.0, 1.0);
       final Paint paint = Paint()
-        ..color = _colorFor(strike.source).withOpacity(t)
+        ..color = _colorFor(strike.source).withValues(alpha: t)
         ..strokeWidth = 2.5
         ..strokeCap = StrokeCap.round;
 

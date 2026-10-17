@@ -47,7 +47,7 @@ class CelestialNodeComponent extends PositionComponent {
     final Paint ringPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 1.5
-      ..color = _planetColor.withOpacity(0.25);
+      ..color = _planetColor.withValues(alpha: 0.25);
     canvas.drawCircle(center, node.interactionRadius, ringPaint);
   }
 
@@ -59,13 +59,13 @@ class CelestialNodeComponent extends PositionComponent {
     // zone, not a docking ring around a small body).
     final Paint fillPaint = Paint()
       ..style = PaintingStyle.fill
-      ..color = _nebulaColor.withOpacity(0.18);
+      ..color = _nebulaColor.withValues(alpha: 0.18);
     canvas.drawCircle(center, node.interactionRadius, fillPaint);
 
     final Paint borderPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = 2.0
-      ..color = _nebulaColor.withOpacity(0.4);
+      ..color = _nebulaColor.withValues(alpha: 0.4);
     canvas.drawCircle(center, node.interactionRadius, borderPaint);
   }
 }
