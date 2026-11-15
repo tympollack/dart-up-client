@@ -24,14 +24,17 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flame/components.dart';
+import 'package:sd_client/swarm/drone_swarm_economy.dart';
 
 class SwarmRenderComponent extends PositionComponent {
   SwarmRenderComponent({
     required this.atlasImage,
     required this.spriteRect,
+    this.economy,
   });
 
   final ui.Image atlasImage;
+  final DroneSwarmEconomy? economy;
 
   /// The single drone sprite's region within the atlas. Repeated for
   /// every entity -- this is one flock of one drone type, not a

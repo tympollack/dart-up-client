@@ -13,6 +13,7 @@
 // unambiguously logic-free.
 // =============================================================================
 
+import 'dart:math' as math;
 import 'dart:ui';
 
 import 'package:flame/components.dart';
@@ -28,22 +29,62 @@ class EnemyFighterRenderComponent extends PositionComponent {
   final FighterRoster enemyFighterRoster;
   final double radius;
 
-  final Paint _paint = Paint()..color = const Color(0xFFFF3B3B);
+  final Paint _hullPaint = Paint()
+    ..color = const Color(0xFFFF3B3B)
+    ..style = PaintingStyle.fill;
+  final Paint _outlinePaint = Paint()
+    ..color = const Color(0xFFFF8A8A)
+    ..style = PaintingStyle.stroke
+    ..strokeWidth = 1.2;
+  final Path _hullPath = Path();
+
+  /// Computes the visual heading (in radians) for fighter `index` toward its
+  /// target coordinate without mutating any simulation state.
+  double headingForFighter(int index) {
+    final double dx =
+        enemyFighterRoster.targetX[index] - enemyFighterRoster.posX[index];
+    final double dy =
+        enemyFighterRoster.targetY[index] - enemyFighterRoster.posY[index];
+    if (dx.abs() < 1e-5 && dy.abs() < 1e-5) {
+      return 0.0;
+    }
+    return math.atan2(dy, dx);
+  }
 
   @override
   void render(Canvas canvas) {
     for (int i = 0; i < enemyFighterRoster.activeCount; i++) {
       final double x = enemyFighterRoster.posX[i];
       final double y = enemyFighterRoster.posY[i];
+      final double angle = headingForFighter(i);
+      final double cosA = math.cos(angle);
+      final double sinA = math.sin(angle);
 
-      final Path diamond = Path()
-        ..moveTo(x, y - radius)
-        ..lineTo(x + radius, y)
-        ..lineTo(x, y + radius)
-        ..lineTo(x - radius, y)
+      // Directional dart/diamond hull: nose pointing along (cosA, sinA),
+      // swept wings on the flanks, and a recessed tail notch.
+      final double noseX = x + cosA * (radius * 1.35);
+      final double noseY = y + sinA * (radius * 1.35);
+      final double rightWingX =
+          x - cosA * (radius * 0.35) - sinA * (radius * 0.85);
+      final double rightWingY =
+          y - sinA * (radius * 0.35) + cosA * (radius * 0.85);
+      final double tailX = x - cosA * (radius * 0.9);
+      final double tailY = y - sinA * (radius * 0.9);
+      final double leftWingX =
+          x - cosA * (radius * 0.35) + sinA * (radius * 0.85);
+      final double leftWingY =
+          y - sinA * (radius * 0.35) - cosA * (radius * 0.85);
+
+      _hullPath
+        ..reset()
+        ..moveTo(noseX, noseY)
+        ..lineTo(rightWingX, rightWingY)
+        ..lineTo(tailX, tailY)
+        ..lineTo(leftWingX, leftWingY)
         ..close();
 
-      canvas.drawPath(diamond, _paint);
+      canvas.drawPath(_hullPath, _hullPaint);
+      canvas.drawPath(_hullPath, _outlinePaint);
     }
   }
 }

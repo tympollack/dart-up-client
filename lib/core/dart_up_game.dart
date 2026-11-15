@@ -38,6 +38,19 @@ import 'package:sd_client/swarm/swarm_isolate.dart';
 import 'package:sd_client/swarm/swarm_render_component.dart';
 
 class DartUpGame extends FlameGame with TapCallbacks {
+  DartUpGame({
+    this.spawnIsolateOnLoad = true,
+    this.customAtlasImage,
+  });
+
+  /// Whether to spawn the background swarm isolate during [onLoad].
+  /// Defaults to `true` in production; can be set to `false` in headless widget/unit tests.
+  final bool spawnIsolateOnLoad;
+
+  /// Optional pre-supplied atlas image for [SwarmRenderComponent].
+  /// If omitted and `drone_atlas.png` is not bundled, a procedural fallback image is generated.
+  final ui.Image? customAtlasImage;
+
   // ---- Engine-agnostic master state. See file header. ----
   late final DroneSwarmEconomy economy;
   late final FighterRoster fighterRoster; // the PLAYER's own fighters
@@ -169,10 +182,11 @@ class DartUpGame extends FlameGame with TapCallbacks {
     );
 
     // Adjust the asset path and source rect to your actual atlas layout.
-    final ui.Image atlasImage = await images.load('drone_atlas.png');
+    final ui.Image atlasImage = await _resolveAtlasImage();
     swarmRenderComponent = SwarmRenderComponent(
       atlasImage: atlasImage,
       spriteRect: const ui.Rect.fromLTWH(0, 0, 32, 32),
+      economy: economy,
     );
 
     hackingUIComponent = HackingUIComponent(controller: hackingController);
@@ -190,7 +204,21 @@ class DartUpGame extends FlameGame with TapCallbacks {
       combatVFXComponent, // laser flashes -- drawn last, on top of everything
     ]);
 
-    await _spawnSwarmIsolate();
+    if (spawnIsolateOnLoad) {
+      await _spawnSwarmIsolate();
+    }
+  }
+
+  Future<ui.Image> _resolveAtlasImage() async {
+    if (customAtlasImage != null) {
+      return customAtlasImage!;
+    }
+    final ui.PictureRecorder recorder = ui.PictureRecorder();
+    final ui.Canvas canvas = ui.Canvas(recorder);
+    final ui.Paint paint = ui.Paint()..color = const ui.Color(0xFF00E5FF);
+    canvas.drawCircle(const ui.Offset(16, 16), 12, paint);
+    final ui.Picture picture = recorder.endRecording();
+    return picture.toImage(32, 32);
   }
 
   Future<void> _spawnSwarmIsolate() async {
