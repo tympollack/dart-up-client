@@ -252,7 +252,7 @@ class CombatManager {
       // O(1500^2) territory; this one never gets close.
       int overlappingDrones = 0;
       for (int d = 0; d < economy.deployedCount; d++) {
-        if (economy.mode[d] != DroneMode.seeking) continue;
+        if (!economy.canDroneFireOrHarvest(d)) continue;
         final double dx = economy.posX[d] - ex;
         final double dy = economy.posY[d] - ey;
         if (dx * dx + dy * dy <= radiusSq) {

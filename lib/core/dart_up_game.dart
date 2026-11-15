@@ -33,6 +33,7 @@ import 'package:sd_client/player/hacking_controller.dart';
 import 'package:sd_client/player/hacking_ui_component.dart';
 import 'package:sd_client/player/player_ship_component.dart';
 import 'package:sd_client/player/ship_warp_controller.dart';
+import 'package:sd_client/simulation/swarm/swarm_simulation.dart';
 import 'package:sd_client/swarm/swarm_isolate.dart';
 import 'package:sd_client/swarm/swarm_render_component.dart';
 
@@ -46,6 +47,8 @@ class DartUpGame extends FlameGame with TapCallbacks {
   late final CelestialNodeManager nodeManager;
   late final EnemyDirector enemyDirector;
   late final CombatManager combatManager;
+  late final BoidsFlockingSolver boidsFlockingSolver;
+  late final PlayerInteractionModel playerInteractionModel;
 
   // ---- Components ----
   late final PlayerShipComponent shipComponent;
@@ -68,6 +71,16 @@ class DartUpGame extends FlameGame with TapCallbacks {
     economy = DroneSwarmEconomy(maxFleetSize: 300);
     fighterRoster = FighterRoster(maxFighterCount: 24);
     enemyFighterRoster = FighterRoster(maxFighterCount: 60);
+    boidsFlockingSolver = BoidsFlockingSolver(
+      unitCount: 500,
+      bounds: ArenaBounds(
+        left: 0,
+        top: 0,
+        width: size.x > 0 ? size.x : 2000.0,
+        height: size.y > 0 ? size.y : 2000.0,
+      ),
+    );
+    playerInteractionModel = PlayerInteractionModel();
 
     shipWarpController = ShipWarpController(
       economy: economy,
