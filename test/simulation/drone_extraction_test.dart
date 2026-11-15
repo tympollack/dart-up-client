@@ -61,13 +61,13 @@ void main() {
       );
       expect(economy.posX[idx], closeTo(100.0, 1e-4));
 
-      // Tick 0.3s -> tether finishes, transitions to extracting and moves toward ship (0, 0)
+      // Tick 0.3s -> tether finishes (0.2s left of tether, 0.1s post-tether movement at 200 u/s = 20 units)
       economy.update(0.3, shipX: 0.0, shipY: 0.0);
       expect(
         economy.extractionStateAt(idx),
         equals(DroneExtractionState.extracting),
       );
-      expect(economy.posX[idx], lessThan(100.0));
+      expect(economy.posX[idx], closeTo(80.0, 1e-4));
       expect(economy.canDroneFireOrHarvest(idx), isFalse);
 
       // Advance until drone reaches arrivalRadius (20.0) of ship at (0, 0)
@@ -158,6 +158,10 @@ void main() {
             e.reason == 'emergency_warp_stranded').length,
         equals(1),
       );
+
+      // Capacity safety: when totalLivingFleet == maxFleetSize, spawnStrandedEnemyDrone returns -1
+      final fullEconomy = DroneSwarmEconomy(maxFleetSize: 5);
+      expect(fullEconomy.spawnStrandedEnemyDrone(50.0, 50.0), equals(-1));
     });
   });
 }

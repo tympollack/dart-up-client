@@ -59,6 +59,23 @@ void main() {
       // Cohesion pulls unit 0 toward unit 1 (+X), alignment pulls unit 0 toward +Y
       expect(cohAlignSteer0.x, greaterThan(0));
       expect(cohAlignSteer0.y, greaterThan(0));
+
+      // Even when separationRadius > perceptionRadius, separation still repels across cells
+      final wideSepSolver = BoidsFlockingSolver(
+        unitCount: 2,
+        bounds: bounds,
+        config: BoidsConfig(
+          perceptionRadius: 30.0,
+          separationRadius: 90.0,
+          boundaryMargin: 0.0,
+        ),
+      )..clearTarget();
+      wideSepSolver.setUnitState(0, x: 500, y: 500, vx: 0, vy: 0);
+      wideSepSolver.setUnitState(1, x: 560, y: 500, vx: 0, vy: 0);
+      wideSepSolver.rebuildSpatialGrid();
+
+      final wideSep0 = wideSepSolver.computeSteeringFor(0);
+      expect(wideSep0.x, lessThan(0));
     });
 
     test('Boundary avoidance steers units inward when inside boundaryMargin', () {

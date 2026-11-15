@@ -324,7 +324,10 @@ class DroneSwarmEconomy {
     if (_deployCooldownRemaining > 0) return 0;
     if (availableCount <= 0) return 0;
 
-    final int n = math.min(config.batchSize, availableCount);
+    final int freeSlots = maxFleetSize - deployedCount;
+    if (freeSlots <= 0) return 0;
+
+    final int n = math.min(config.batchSize, math.min(availableCount, freeSlots));
     for (int k = 0; k < n; k++) {
       _spawnOne(shipX, shipY, targetX, targetY);
     }
@@ -360,8 +363,11 @@ class DroneSwarmEconomy {
 
   /// Spawns a derelict/stranded enemy drone directly at `(x, y)` for heist/hack
   /// scenarios without consuming from the player's own `availableCount`.
+  /// Returns `-1` if the fleet buffers (`totalLivingFleet >= maxFleetSize`) are at capacity.
   int spawnStrandedEnemyDrone(double x, double y, {int? healthOverride}) {
-    if (deployedCount >= maxFleetSize) return -1;
+    if (totalLivingFleet >= maxFleetSize || deployedCount >= maxFleetSize) {
+      return -1;
+    }
     final int i = deployedCount;
     posX[i] = x;
     posY[i] = y;
@@ -558,14 +564,17 @@ class DroneSwarmEconomy {
       if (m == DroneMode.stranded) continue;
       if (m != DroneMode.returning && m != DroneMode.hacked) continue;
 
+      double moveDt = dt;
       if (m == DroneMode.hacked && tetherRemaining[i] > 0) {
         tetherRemaining[i] -= dt;
         if (tetherRemaining[i] > 0) {
           extractionStateIndex[i] = DroneExtractionState.tethering.index;
           continue;
         }
+        moveDt = -tetherRemaining[i];
         tetherRemaining[i] = 0.0;
         extractionStateIndex[i] = DroneExtractionState.extracting.index;
+        if (moveDt <= 0.0) continue;
       }
 
       final double dx = shipX - posX[i];
@@ -583,8 +592,10 @@ class DroneSwarmEconomy {
       if (m == DroneMode.hacked) {
         extractionStateIndex[i] = DroneExtractionState.extracting.index;
         double w = wobbleAngle[i];
-        w += (_rng.nextDouble() * 2 - 1) * config.wobbleJitterPerSecond * dt;
-        w -= w * config.wobbleRestoringRate * dt;
+        w += (_rng.nextDouble() * 2 - 1) *
+            config.wobbleJitterPerSecond *
+            moveDt;
+        w -= w * config.wobbleRestoringRate * moveDt;
         if (w > config.wobbleMaxAngle) {
           w = config.wobbleMaxAngle;
         } else if (w < -config.wobbleMaxAngle) {
@@ -598,8 +609,8 @@ class DroneSwarmEconomy {
 
       velX[i] = math.cos(headingAngle) * speed;
       velY[i] = math.sin(headingAngle) * speed;
-      posX[i] += velX[i] * dt;
-      posY[i] += velY[i] * dt;
+      posX[i] += velX[i] * moveDt;
+      posY[i] += velY[i] * moveDt;
     }
 
     // Advance clock and tick recharge / refit timers

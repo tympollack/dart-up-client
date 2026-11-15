@@ -340,9 +340,12 @@ class BoidsFlockingSolver {
       cy = _gridRows - 1;
     }
 
-    for (int ny = cy - 1; ny <= cy + 1; ny++) {
+    final maxRadius = math.max(config.perceptionRadius, config.separationRadius);
+    final int cellRadius = math.max(1, (maxRadius / cellSize).ceil());
+
+    for (int ny = cy - cellRadius; ny <= cy + cellRadius; ny++) {
       if (ny < 0 || ny >= _gridRows) continue;
-      for (int nx = cx - 1; nx <= cx + 1; nx++) {
+      for (int nx = cx - cellRadius; nx <= cx + cellRadius; nx++) {
         if (nx < 0 || nx >= _gridCols) continue;
         final cell = ny * _gridCols + nx;
         final start = _cellStart[cell];
@@ -353,13 +356,15 @@ class BoidsFlockingSolver {
           final dx = px - posX[j];
           final dy = py - posY[j];
           final distSq = dx * dx + dy * dy;
-          if (distSq > perceptionSq || distSq <= 0.0) continue;
+          if (distSq <= 0.0) continue;
 
-          neighborCount++;
-          alignX += velX[j];
-          alignY += velY[j];
-          cohX += posX[j];
-          cohY += posY[j];
+          if (distSq <= perceptionSq) {
+            neighborCount++;
+            alignX += velX[j];
+            alignY += velY[j];
+            cohX += posX[j];
+            cohY += posY[j];
+          }
 
           if (distSq < separationSq) {
             final inv = 1.0 / distSq;
