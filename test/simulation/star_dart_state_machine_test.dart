@@ -117,5 +117,47 @@ void main() {
       boss.update(8.0);
       expect(boss.state, equals(StarDartBossState.escapedJump));
     });
+
+    test('Repeated setPosition outside breach radius only triggers cataclysm on boundary crossing, preserves derelict/capture states, and carries leftover ambush cooldown dt into derelict escape timer', () {
+      final boss = StarDartStateMachine(
+        config: const StarDartConfig(
+          maxShields: 50.0,
+          maxHull: 50.0,
+          captureDurationSeconds: 10.0,
+          derelictEscapeTimeoutSeconds: 8.0,
+          ambushCooldownSeconds: 2.0,
+          deepSectorBreachRadius: 4000.0,
+        ),
+      );
+
+      // Crossing from inside (0,0) to outside (4500, 0) triggers level 1
+      boss.setPosition(4500.0, 0.0, triggeringPlayerId: 'scout-1');
+      expect(boss.globalSiegeAlertLevel, equals(1));
+
+      // Moving further while already outside does NOT re-trigger
+      boss.setPosition(4600.0, 100.0, triggeringPlayerId: 'scout-1');
+      expect(boss.globalSiegeAlertLevel, equals(1));
+
+      // Cripple the boss and begin capture
+      boss.applyDamage(120.0);
+      expect(boss.state, equals(StarDartBossState.crippledDerelict));
+      expect(boss.beginRepairCapture('scout-1'), isTrue);
+      expect(boss.state, equals(StarDartBossState.repairCaptureInProgress));
+
+      // Explicit cataclysm trigger during repairCaptureInProgress must NOT overwrite capture state
+      boss.triggerEarthCataclysmProtocol(triggeringPlayerId: 'scout-2');
+      expect(boss.globalSiegeAlertLevel, equals(2));
+      expect(boss.state, equals(StarDartBossState.repairCaptureInProgress));
+      expect(boss.isCapturingShipVulnerableLock, isTrue);
+
+      // Ambush interruption -> contestedAmbush (2.0s cooldown + 8.0s derelict timeout)
+      expect(boss.triggerAmbushInterruption(ambusherPlayerId: 'raider-1'), isTrue);
+      expect(boss.state, equals(StarDartBossState.contestedAmbush));
+
+      // Single 5.0s tick consumes 2.0s cooldown AND 3.0s of derelict escape window (leaving 5.0s)
+      boss.update(5.0);
+      expect(boss.state, equals(StarDartBossState.crippledDerelict));
+      expect(boss.derelictEscapeRemainingSeconds, closeTo(5.0, 1e-5));
+    });
   });
 }

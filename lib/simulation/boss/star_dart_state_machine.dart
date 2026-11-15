@@ -127,6 +127,9 @@ class StarDartStateMachine {
   })  : config = config ?? const StarDartConfig(),
         _x = initialX,
         _y = initialY {
+    if (math.sqrt(_x * _x + _y * _y) >= this.config.deepSectorBreachRadius) {
+      triggerEarthCataclysmProtocol();
+    }
     _shields = this.config.maxShields;
     _hull = this.config.maxHull;
   }
@@ -221,10 +224,13 @@ class StarDartStateMachine {
     double newY, {
     String? triggeringPlayerId,
   }) {
+    final prevDist = math.sqrt(_x * _x + _y * _y);
     _x = newX;
     _y = newY;
     final dist = math.sqrt(_x * _x + _y * _y);
-    if (dist >= config.deepSectorBreachRadius) {
+    final wasInside = prevDist < config.deepSectorBreachRadius;
+    if (dist >= config.deepSectorBreachRadius &&
+        (wasInside || !_earthCataclysmActive)) {
       triggerEarthCataclysmProtocol(triggeringPlayerId: triggeringPlayerId);
     }
   }
@@ -238,8 +244,9 @@ class StarDartStateMachine {
     _globalSiegeAlertLevel++;
 
     if (transitionBossState &&
-        _state != StarDartBossState.captured &&
-        _state != StarDartBossState.escapedJump) {
+        (_state == StarDartBossState.roaming ||
+            _state == StarDartBossState.shieldBreached ||
+            _state == StarDartBossState.earthCataclysmAlert)) {
       _transitionTo(StarDartBossState.earthCataclysmAlert);
     }
 
@@ -376,10 +383,19 @@ class StarDartStateMachine {
     }
 
     if (_state == StarDartBossState.contestedAmbush) {
+      final prevCooldown = _ambushCooldownRemaining;
       _ambushCooldownRemaining -= dt;
       if (_ambushCooldownRemaining <= 0) {
+        final leftoverDt = dt - math.max(0.0, prevCooldown);
         _ambushCooldownRemaining = 0.0;
         _transitionTo(StarDartBossState.crippledDerelict);
+        if (leftoverDt > 0) {
+          _derelictEscapeRemainingSeconds -= leftoverDt;
+          if (_derelictEscapeRemainingSeconds <= 0) {
+            _derelictEscapeRemainingSeconds = 0.0;
+            _transitionTo(StarDartBossState.escapedJump);
+          }
+        }
       }
       return;
     }
