@@ -153,5 +153,35 @@ void main() {
       listener.dispose();
       hubService.dispose();
     });
+
+    test('Disposed GladiatorMatchListener detaches from channel and ignores subsequent drops', () {
+      final hubService = HubApiService();
+      final economy = DroneSwarmEconomy(maxFleetSize: 20);
+      final warpController = ShipWarpController(
+        economy: economy,
+        fighterRoster: FighterRoster(maxFighterCount: 4),
+      );
+
+      final listener = GladiatorMatchListener(
+        hubApiService: hubService,
+        economy: economy,
+        warpController: warpController,
+      );
+
+      final channel = hubService.subscribeToMatchChannel('match_dispose_test');
+      listener.attachToChannel(channel);
+      listener.dispose();
+
+      channel.emitSimulatedBroadcast('gladiator_drop', {
+        'drop_id': 'flare_after_dispose',
+        'command': '!solar_flare',
+        'x': 100.0,
+        'y': 100.0,
+      });
+
+      expect(listener.spawnRecords, isEmpty);
+      expect(warpController.anomalies, isEmpty);
+      hubService.dispose();
+    });
   });
 }

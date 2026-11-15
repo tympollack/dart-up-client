@@ -40,6 +40,10 @@ void main() {
 }
 
 class StarDartMVP extends FlameGame with TapCallbacks {
+  StarDartMVP({String? matchId})
+      : matchId = matchId ?? HubClient.generateMatchId();
+
+  final String matchId;
   late Ship playerShip;
   late SwarmManager droneSwarm; // NEW: The Swarm!
   late TacticalRTSComponent tacticalRTS; // NEW: Kenney RTS Tactical Subsystem!
@@ -52,6 +56,7 @@ class StarDartMVP extends FlameGame with TapCallbacks {
 
   @override
   Future<void> onLoad() async {
+    HubClient.sharedService.subscribeToMatchChannel(matchId);
     gameWorld = World();
     add(gameWorld);
 
@@ -111,6 +116,7 @@ class StarDartMVP extends FlameGame with TapCallbacks {
   void endMatch() {
     debugPrint("Ending match and syncing to Hub...");
     HubClient.postMatchResult(
+      matchId: matchId,
       gameName: 'Star Dart',
       opponentName: 'Swarm Director',
       result: 'victory', // Mocking a victory for now

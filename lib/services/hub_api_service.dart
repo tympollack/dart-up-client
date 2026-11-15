@@ -183,37 +183,72 @@ class SpectatorCheerEvent {
 }
 
 /// Lightweight abstraction over a Supabase Realtime broadcast channel so tests
-/// and live WebSocket clients can subscribe and inject ephemeral events cleanly.
+/// and live WebSocket/HTTP clients can subscribe and inject ephemeral events cleanly.
 abstract class RealtimeMatchChannel {
   String get channelTopic;
   bool get isSubscribed;
   void subscribe();
   void unsubscribe();
-  void onBroadcast(String eventName, void Function(Map<String, dynamic> payload) callback);
+  void onBroadcast(
+    String eventName,
+    void Function(Map<String, dynamic> payload) callback,
+  );
+  void offBroadcast(
+    String eventName,
+    void Function(Map<String, dynamic> payload) callback,
+  );
   void emitSimulatedBroadcast(String eventName, Map<String, dynamic> payload);
 }
 
-/// Default in-memory / bridge implementation of [RealtimeMatchChannel].
+/// Transport-backed implementation of [RealtimeMatchChannel] supporting both
+/// live HTTP/Realtime broadcast polling and direct simulated broadcasts.
 class SupabaseRealtimeMatchChannel implements RealtimeMatchChannel {
-  SupabaseRealtimeMatchChannel({required this.channelTopic});
+  SupabaseRealtimeMatchChannel({
+    required this.channelTopic,
+    this.httpClient,
+    this.endpointUrl,
+    this.accessTokenProvider,
+    this.pollInterval,
+  });
 
   @override
   final String channelTopic;
 
+  final http.Client? httpClient;
+  final String? endpointUrl;
+  final String? Function()? accessTokenProvider;
+  final Duration? pollInterval;
+
   bool _subscribed = false;
-  final Map<String, List<void Function(Map<String, dynamic> payload)>> _listeners = {};
+  Timer? _pollTimer;
+  String? _lastCursor;
+  final Map<String, List<void Function(Map<String, dynamic> payload)>>
+      _listeners = {};
 
   @override
   bool get isSubscribed => _subscribed;
 
   @override
   void subscribe() {
+    if (_subscribed) return;
     _subscribed = true;
+    final interval = pollInterval;
+    if (interval != null &&
+        interval > Duration.zero &&
+        httpClient != null &&
+        endpointUrl != null) {
+      _pollTimer?.cancel();
+      _pollTimer = Timer.periodic(interval, (_) {
+        unawaited(pollBroadcastsOnce());
+      });
+    }
   }
 
   @override
   void unsubscribe() {
     _subscribed = false;
+    _pollTimer?.cancel();
+    _pollTimer = null;
     _listeners.clear();
   }
 
@@ -222,16 +257,93 @@ class SupabaseRealtimeMatchChannel implements RealtimeMatchChannel {
     String eventName,
     void Function(Map<String, dynamic> payload) callback,
   ) {
-    _listeners.putIfAbsent(eventName, () => []).add(callback);
+    final callbacks = _listeners.putIfAbsent(eventName, () => []);
+    if (!callbacks.contains(callback)) {
+      callbacks.add(callback);
+    }
+  }
+
+  @override
+  void offBroadcast(
+    String eventName,
+    void Function(Map<String, dynamic> payload) callback,
+  ) {
+    _listeners[eventName]?.remove(callback);
   }
 
   @override
   void emitSimulatedBroadcast(String eventName, Map<String, dynamic> payload) {
     if (!_subscribed) return;
     final callbacks = _listeners[eventName];
-    if (callbacks == null) return;
-    for (final cb in List<void Function(Map<String, dynamic>)>.from(callbacks)) {
+    if (callbacks == null || callbacks.isEmpty) return;
+    for (final cb
+        in List<void Function(Map<String, dynamic>)>.from(callbacks)) {
       cb(payload);
+    }
+  }
+
+  /// Polls the Hub Realtime broadcast bridge once for any pending server events
+  /// on [channelTopic] and dispatches them to registered broadcast listeners.
+  Future<int> pollBroadcastsOnce() async {
+    if (!_subscribed || httpClient == null || endpointUrl == null) {
+      return 0;
+    }
+
+    final Uri baseUri = Uri.parse(endpointUrl!);
+    final Map<String, String> query = {
+      ...baseUri.queryParameters,
+      'topic': channelTopic,
+      'cursor': ?_lastCursor,
+    };
+    final Uri requestUri = baseUri.replace(queryParameters: query);
+
+    final String? token = accessTokenProvider?.call();
+    final Map<String, String> headers = {
+      'Accept': 'application/json',
+      if (token != null && token.isNotEmpty) 'Authorization': 'Bearer $token',
+    };
+
+    try {
+      final response = await httpClient!.get(requestUri, headers: headers);
+      if (!_subscribed ||
+          response.statusCode < 200 ||
+          response.statusCode >= 300 ||
+          response.body.isEmpty) {
+        return 0;
+      }
+
+      final dynamic decoded = jsonDecode(response.body);
+      if (decoded is! Map<String, dynamic> || decoded['error'] != null) {
+        return 0;
+      }
+
+      if (decoded['next_cursor'] is String) {
+        _lastCursor = decoded['next_cursor'] as String;
+      }
+
+      final dynamic rawEvents = decoded['events'];
+      if (rawEvents is! List) return 0;
+
+      int dispatched = 0;
+      for (final item in rawEvents) {
+        if (!_subscribed) break;
+        if (item is Map<String, dynamic>) {
+          final String? eventName =
+              (item['event'] ?? item['type'])?.toString();
+          final Map<String, dynamic> eventPayload =
+              item['payload'] is Map<String, dynamic>
+                  ? item['payload'] as Map<String, dynamic>
+                  : item;
+          if (eventName != null && eventName.isNotEmpty) {
+            emitSimulatedBroadcast(eventName, eventPayload);
+            dispatched++;
+          }
+        }
+      }
+      return dispatched;
+    } catch (e) {
+      debugPrint('[SupabaseRealtimeMatchChannel] poll error: $e');
+      return 0;
     }
   }
 }
@@ -239,28 +351,41 @@ class SupabaseRealtimeMatchChannel implements RealtimeMatchChannel {
 /// Service connecting *Dart Up!* to SunShade Hub SSO authentication, post-match
 /// submission, `@digitalcanopy/achievements`, and Supabase Realtime spectator cheers.
 class HubApiService {
+  static const String defaultBaseUrl = String.fromEnvironment(
+    'SUNSHADE_HUB_URL',
+    defaultValue: 'https://hub-stag.sunshade.icu',
+  );
+
   HubApiService({
-    this.baseUrl = 'https://hub-stag.sunshade.icu',
+    this.baseUrl = defaultBaseUrl,
     http.Client? httpClient,
     this.maxRetries = 3,
     this.retryDelay = const Duration(milliseconds: 20),
-  }) : _httpClient = httpClient ?? http.Client();
+    this.realtimePollInterval,
+  })  : _ownsHttpClient = httpClient == null,
+        _httpClient = httpClient ?? http.Client();
 
   final String baseUrl;
   final http.Client _httpClient;
+  final bool _ownsHttpClient;
   final int maxRetries;
   final Duration retryDelay;
+  final Duration? realtimePollInterval;
 
   String? _accessToken;
   String? _refreshToken;
   String? _userId;
   RealtimeMatchChannel? _activeMatchChannel;
+  bool _disposed = false;
 
   final Set<String> _unlockedFeatIds = {};
+  final Set<String> _syncedFeatIds = {};
+  final Set<String> _inFlightFeatIds = {};
   final List<AchievementToastNotification> _toastHistory = [];
   final List<SpectatorCheerEvent> _activeCockpitCheers = [];
 
-  final StreamController<AchievementToastNotification> _achievementToastController =
+  final StreamController<AchievementToastNotification>
+      _achievementToastController =
       StreamController<AchievementToastNotification>.broadcast();
   final StreamController<SpectatorCheerEvent> _spectatorCheerController =
       StreamController<SpectatorCheerEvent>.broadcast();
@@ -269,6 +394,7 @@ class HubApiService {
   String? get refreshToken => _refreshToken;
   String? get userId => _userId;
   bool get isAuthenticated => _accessToken != null && _accessToken!.isNotEmpty;
+  bool get isDisposed => _disposed;
 
   RealtimeMatchChannel? get activeMatchChannel => _activeMatchChannel;
 
@@ -277,6 +403,7 @@ class HubApiService {
   List<AchievementToastNotification> get toastHistory =>
       List.unmodifiable(_toastHistory);
   Set<String> get unlockedFeatIds => Set.unmodifiable(_unlockedFeatIds);
+  Set<String> get syncedFeatIds => Set.unmodifiable(_syncedFeatIds);
 
   Stream<SpectatorCheerEvent> get spectatorCheers =>
       _spectatorCheerController.stream;
@@ -454,51 +581,84 @@ class HubApiService {
   /// Maps in-game feats (`star_dart_siege_survivor`, `three_way_ambush`,
   /// `smuggler_ring_crack`) to `@digitalcanopy/achievements` milestone triggers
   /// and emits an [AchievementToastNotification] for the HUD.
+  ///
+  /// If a previous call unlocked the feat locally while offline or during a
+  /// network failure, subsequent calls retry the Hub sync without duplicating
+  /// local unlock state once synced.
   Future<AchievementToastNotification?> triggerMilestoneAchievement(
     DartUpMilestoneFeat feat, {
     String matchId = 'active_match',
   }) async {
-    if (_unlockedFeatIds.contains(feat.id)) {
-      return null; // Already unlocked in this session
+    if (_disposed ||
+        _syncedFeatIds.contains(feat.id) ||
+        _inFlightFeatIds.contains(feat.id)) {
+      return null;
     }
+
+    final bool wasAlreadyUnlockedLocally = _unlockedFeatIds.contains(feat.id);
     _unlockedFeatIds.add(feat.id);
+    _inFlightFeatIds.add(feat.id);
 
     bool synced = false;
-    if (isAuthenticated) {
-      final Uri url = Uri.parse('$baseUrl/api/achievements/unlock');
-      try {
-        final response = await _httpClient.post(
-          url,
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer $_accessToken',
-            'Idempotency-Key': 'ach_${matchId}_${feat.id}',
-          },
-          body: jsonEncode({
-            'package': '@digitalcanopy/achievements',
-            'achievement_code': feat.achievementCode,
-            'feat_id': feat.id,
-            'match_id': matchId,
-            'title': feat.title,
-          }),
-        );
-
-        Map<String, dynamic>? parsed;
-        if (response.body.isNotEmpty) {
+    try {
+      if (isAuthenticated) {
+        final Uri url = Uri.parse('$baseUrl/api/achievements/unlock');
+        int attempts = 0;
+        while (attempts < maxRetries && !synced) {
+          attempts++;
           try {
-            final d = jsonDecode(response.body);
-            if (d is Map<String, dynamic>) parsed = d;
-          } catch (_) {}
-        }
+            final response = await _httpClient.post(
+              url,
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': 'Bearer $_accessToken',
+                'Idempotency-Key': 'ach_${matchId}_${feat.id}',
+              },
+              body: jsonEncode({
+                'package': '@digitalcanopy/achievements',
+                'achievement_code': feat.achievementCode,
+                'feat_id': feat.id,
+                'match_id': matchId,
+                'title': feat.title,
+              }),
+            );
 
-        if (response.statusCode >= 200 &&
-            response.statusCode < 300 &&
-            parsed?['error'] == null) {
-          synced = true;
+            Map<String, dynamic>? parsed;
+            if (response.body.isNotEmpty) {
+              try {
+                final d = jsonDecode(response.body);
+                if (d is Map<String, dynamic>) parsed = d;
+              } catch (_) {}
+            }
+
+            if (response.statusCode >= 200 &&
+                response.statusCode < 300 &&
+                parsed?['error'] == null) {
+              synced = true;
+              _syncedFeatIds.add(feat.id);
+              break;
+            }
+
+            if (response.statusCode >= 400 &&
+                response.statusCode < 500 &&
+                response.statusCode != 429) {
+              break;
+            }
+          } catch (e) {
+            debugPrint('[HubApiService] Achievement unlock error: $e');
+          }
+
+          if (!synced && attempts < maxRetries && retryDelay > Duration.zero) {
+            await Future<void>.delayed(retryDelay);
+          }
         }
-      } catch (e) {
-        debugPrint('[HubApiService] Achievement unlock error: $e');
       }
+    } finally {
+      _inFlightFeatIds.remove(feat.id);
+    }
+
+    if (wasAlreadyUnlockedLocally && !synced) {
+      return null;
     }
 
     final toast = AchievementToastNotification(
@@ -507,7 +667,19 @@ class HubApiService {
       matchId: matchId,
       syncedWithHub: synced,
     );
-    _toastHistory.add(toast);
+
+    if (wasAlreadyUnlockedLocally) {
+      final int existingIdx =
+          _toastHistory.indexWhere((t) => t.feat.id == feat.id);
+      if (existingIdx >= 0) {
+        _toastHistory[existingIdx] = toast;
+      } else {
+        _toastHistory.add(toast);
+      }
+    } else {
+      _toastHistory.add(toast);
+    }
+
     if (!_achievementToastController.isClosed) {
       _achievementToastController.add(toast);
     }
@@ -523,14 +695,22 @@ class HubApiService {
   RealtimeMatchChannel subscribeToMatchChannel(
     String matchId, {
     RealtimeMatchChannel? customChannel,
+    Duration? pollInterval,
   }) {
     _activeMatchChannel?.unsubscribe();
 
     final channel = customChannel ??
-        SupabaseRealtimeMatchChannel(channelTopic: 'realtime:hub:match:$matchId');
+        SupabaseRealtimeMatchChannel(
+          channelTopic: 'realtime:hub:match:$matchId',
+          httpClient: _httpClient,
+          endpointUrl: '$baseUrl/api/realtime/broadcasts',
+          accessTokenProvider: () => _accessToken,
+          pollInterval: pollInterval ?? realtimePollInterval,
+        );
     _activeMatchChannel = channel;
 
     channel.onBroadcast('spectator_cheer', (payload) {
+      if (_disposed) return;
       final cheer = SpectatorCheerEvent.fromPayload(
         payload,
         defaultMatchId: matchId,
@@ -549,9 +729,14 @@ class HubApiService {
   }
 
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
     _activeMatchChannel?.unsubscribe();
     _activeMatchChannel = null;
     _achievementToastController.close();
     _spectatorCheerController.close();
+    if (_ownsHttpClient) {
+      _httpClient.close();
+    }
   }
 }

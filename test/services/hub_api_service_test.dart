@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:sd_client/services/hub_api_service.dart';
+import 'package:sd_client/hub/hub_client.dart';
 
 void main() {
   group('TASK-DARTUP-HUB-SDK-BRIDGE: HubApiService, Achievements & Spectator Cheers', () {
@@ -24,6 +24,7 @@ void main() {
       expect(service.accessToken, equals(jwt));
       expect(service.refreshToken, equals('ref_123'));
       expect(service.userId, equals('user_tymz_01'));
+      service.dispose();
     });
 
     test('submitMatchResult retries transient 500 error, attaches Idempotency-Key, and triggers achievement toasts', () async {
@@ -98,8 +99,95 @@ void main() {
       service.dispose();
     });
 
-    test('Subscribes to Supabase Realtime match channel and buffers incoming spectator cheers for cockpit HUD', () async {
-      final service = HubApiService();
+    test('Retries failed or offline achievement unlock on subsequent trigger and generates unique match IDs in HubClient', () async {
+      int unlockRequests = 0;
+      final mockClient = MockClient((http.Request request) async {
+        if (request.url.path == '/api/achievements/unlock') {
+          unlockRequests++;
+          if (unlockRequests == 1) {
+            return http.Response(jsonEncode({'error': 'Bad request'}), 400);
+          }
+          return http.Response(jsonEncode({'unlocked': true}), 200);
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final service = HubApiService(
+        httpClient: mockClient,
+        maxRetries: 1,
+        retryDelay: Duration.zero,
+      );
+
+      // 1. Trigger while unauthenticated -> local toast emitted (syncedWithHub: false)
+      final offlineToast = await service.triggerMilestoneAchievement(
+        DartUpMilestoneFeat.smugglerRingCrack,
+        matchId: 'm_retry',
+      );
+      expect(offlineToast, isNotNull);
+      expect(offlineToast!.syncedWithHub, isFalse);
+      expect(service.unlockedFeatIds.contains('smuggler_ring_crack'), isTrue);
+      expect(service.syncedFeatIds.contains('smuggler_ring_crack'), isFalse);
+
+      // 2. Authenticate and retry -> first HTTP attempt returns 400, so still unsynced
+      service.authenticateWithSession(accessToken: 'jwt_retry');
+      final failedRetry = await service.triggerMilestoneAchievement(
+        DartUpMilestoneFeat.smugglerRingCrack,
+        matchId: 'm_retry',
+      );
+      expect(failedRetry, isNull);
+      expect(service.syncedFeatIds.contains('smuggler_ring_crack'), isFalse);
+
+      // 3. Retry again -> HTTP 200 succeeds and marks feat synced
+      final syncedToast = await service.triggerMilestoneAchievement(
+        DartUpMilestoneFeat.smugglerRingCrack,
+        matchId: 'm_retry',
+      );
+      expect(syncedToast, isNotNull);
+      expect(syncedToast!.syncedWithHub, isTrue);
+      expect(service.syncedFeatIds.contains('smuggler_ring_crack'), isTrue);
+
+      // 4. Subsequent call after sync is a no-op
+      final postSyncCall = await service.triggerMilestoneAchievement(
+        DartUpMilestoneFeat.smugglerRingCrack,
+        matchId: 'm_retry',
+      );
+      expect(postSyncCall, isNull);
+      expect(unlockRequests, equals(2));
+
+      // Verify HubClient generates distinct match IDs per match
+      final id1 = HubClient.generateMatchId();
+      final id2 = HubClient.generateMatchId();
+      expect(id1, isNot(equals(id2)));
+
+      service.dispose();
+    });
+
+    test('Subscribes to Supabase Realtime match channel and buffers incoming spectator cheers via both simulated and HTTP poll broadcasts', () async {
+      final mockClient = MockClient((http.Request request) async {
+        if (request.url.path == '/api/realtime/broadcasts') {
+          return http.Response(
+            jsonEncode({
+              'next_cursor': 'cur_2',
+              'events': [
+                {
+                  'event': 'spectator_cheer',
+                  'payload': {
+                    'cheer_id': 'c_100',
+                    'match_id': 'match_77',
+                    'spectator_handle': 'LiveStreamer',
+                    'message': 'Warp out now!',
+                    'cheer_amount': 100,
+                  },
+                },
+              ],
+            }),
+            200,
+          );
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final service = HubApiService(httpClient: mockClient);
       final channel = service.subscribeToMatchChannel('match_77');
       expect(channel.isSubscribed, isTrue);
 
@@ -114,13 +202,20 @@ void main() {
         'cheer_amount': 50,
       });
 
+      if (channel is SupabaseRealtimeMatchChannel) {
+        final dispatched = await channel.pollBroadcastsOnce();
+        expect(dispatched, equals(1));
+      }
+
       await Future<void>.delayed(const Duration(milliseconds: 5));
       await sub.cancel();
 
-      expect(receivedCheers.length, equals(1));
+      expect(receivedCheers.length, equals(2));
       expect(receivedCheers.first.spectatorHandle, equals('OrbitalWatcher'));
       expect(receivedCheers.first.cheerAmount, equals(50));
-      expect(service.activeCockpitCheers.length, equals(1));
+      expect(receivedCheers.last.spectatorHandle, equals('LiveStreamer'));
+      expect(receivedCheers.last.cheerAmount, equals(100));
+      expect(service.activeCockpitCheers.length, equals(2));
       service.dispose();
     });
   });

@@ -190,34 +190,50 @@ class GladiatorMatchListener {
     this.enemyDirector,
     http.Client? httpClient,
     this.cdnBaseUrl = CosmeticSpriteManifest.defaultCdnBaseUrl,
-  }) : _httpClient = httpClient ?? http.Client();
+  })  : _ownsHttpClient = httpClient == null,
+        _httpClient = httpClient ?? http.Client();
 
   final HubApiService hubApiService;
   final DroneSwarmEconomy economy;
   final ShipWarpController warpController;
   final EnemyDirector? enemyDirector;
   final http.Client _httpClient;
+  final bool _ownsHttpClient;
   final String cdnBaseUrl;
 
   final List<GladiatorSpawnRecord> _spawnRecords = [];
   final StreamController<GladiatorSpawnRecord> _dropStreamController =
       StreamController<GladiatorSpawnRecord>.broadcast();
 
+  RealtimeMatchChannel? _attachedChannel;
+  bool _disposed = false;
   CosmeticSpriteManifest? _equippedCosmetics;
 
+  bool get isDisposed => _disposed;
   List<GladiatorSpawnRecord> get spawnRecords => List.unmodifiable(_spawnRecords);
   Stream<GladiatorSpawnRecord> get onGladiatorDropSpawned =>
       _dropStreamController.stream;
   CosmeticSpriteManifest? get equippedCosmetics => _equippedCosmetics;
 
-  /// Attaches a `gladiator_drop` broadcast listener onto [channel].
+  /// Attaches a `gladiator_drop` broadcast listener onto [channel], detaching
+  /// from any previously bound channel first.
   void attachToChannel(RealtimeMatchChannel channel) {
-    channel.onBroadcast('gladiator_drop', handleGladiatorDropPayload);
+    if (_disposed) return;
+    _attachedChannel?.offBroadcast('gladiator_drop', _onChannelDropBroadcast);
+    _attachedChannel = channel;
+    channel.onBroadcast('gladiator_drop', _onChannelDropBroadcast);
+  }
+
+  void _onChannelDropBroadcast(Map<String, dynamic> payload) {
+    if (_disposed) return;
+    handleGladiatorDropPayload(payload);
   }
 
   /// Parses and immediately injects a `gladiator_drop` payload into the
   /// simulation (`solar_flare`, `drone_swarm`, `supply_crate`).
-  GladiatorSpawnRecord handleGladiatorDropPayload(Map<String, dynamic> payload) {
+  GladiatorSpawnRecord? handleGladiatorDropPayload(Map<String, dynamic> payload) {
+    if (_disposed) return null;
+
     final stopwatch = Stopwatch()..start();
     final event = GladiatorDropEvent.fromPayload(payload);
 
@@ -340,6 +356,13 @@ class GladiatorMatchListener {
   }
 
   void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _attachedChannel?.offBroadcast('gladiator_drop', _onChannelDropBroadcast);
+    _attachedChannel = null;
     _dropStreamController.close();
+    if (_ownsHttpClient) {
+      _httpClient.close();
+    }
   }
 }
