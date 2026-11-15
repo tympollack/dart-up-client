@@ -1,55 +1,57 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
+import 'package:sd_client/services/hub_api_service.dart';
+
+export 'package:sd_client/services/hub_api_service.dart';
 
 class HubClient {
-  static const String baseUrl = 'https://hub.sunshade.health'; // Change if testing locally
-  static String? accessToken;
+  static const String baseUrl = 'https://hub-stag.sunshade.icu';
+  static HubApiService sharedService = HubApiService(baseUrl: baseUrl);
 
-  /// Initializes the token from the URL query parameters (SSO from Hub)
-  static void initializeFromUrl(Uri uri) {
-    if (uri.queryParameters.containsKey('access_token')) {
-      accessToken = uri.queryParameters['access_token'];
+  static String? get accessToken => sharedService.accessToken;
+  static set accessToken(String? token) {
+    if (token == null || token.isEmpty) {
+      sharedService = HubApiService(baseUrl: baseUrl);
+    } else {
+      sharedService.authenticateWithSession(accessToken: token);
     }
   }
 
+  /// Initializes the token from the URL query parameters (SSO from Hub)
+  static void initializeFromUrl(Uri uri) {
+    sharedService.authenticateFromUrl(uri);
+  }
+
   /// Sends the match result to the SunShade Hub UI ingest API
-  static Future<void> postMatchResult({
+  static Future<MatchSubmissionResult> postMatchResult({
     required String gameName,
     required String opponentName,
     required String result,
     required String matchType,
     required int moves,
+    String matchId = 'sandbox_match',
+    List<String> featsUnlocked = const [],
   }) async {
-    if (accessToken == null) {
+    if (!sharedService.isAuthenticated) {
       debugPrint('No access token available. Cannot post match result.');
-      return;
-    }
-
-    final url = Uri.parse('$baseUrl/api/matches/ingest');
-    try {
-      final response = await http.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $accessToken',
-        },
-        body: jsonEncode({
-          'game_name': gameName,
-          'opponent_name': opponentName,
-          'result': result,
-          'match_type': matchType,
-          'moves': moves,
-        }),
+      return MatchSubmissionResult(
+        ok: false,
+        statusCode: 401,
+        attempts: 0,
+        idempotencyKey: 'unauthenticated',
+        error: 'No access token available.',
       );
-
-      if (response.statusCode == 200) {
-        debugPrint('Successfully synced match to Hub!');
-      } else {
-        debugPrint('Failed to sync match. Status: ${response.statusCode}, Body: ${response.body}');
-      }
-    } catch (e) {
-      debugPrint('Error posting match result: $e');
     }
+
+    return sharedService.submitMatchResult(
+      MatchSummary(
+        matchId: matchId,
+        gameName: gameName,
+        opponentName: opponentName,
+        outcome: result,
+        matchType: matchType,
+        moves: moves,
+        featsUnlocked: featsUnlocked,
+      ),
+    );
   }
 }
