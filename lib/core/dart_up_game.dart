@@ -42,6 +42,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
   DartUpGame({
     this.spawnIsolateOnLoad = true,
     this.customAtlasImage,
+    this.loadBundledAtlasAsset = false,
   });
 
   /// Whether to spawn the background swarm isolate during [onLoad].
@@ -49,8 +50,11 @@ class DartUpGame extends FlameGame with TapCallbacks {
   final bool spawnIsolateOnLoad;
 
   /// Optional pre-supplied atlas image for [SwarmRenderComponent].
-  /// If omitted and `drone_atlas.png` is not bundled, a procedural fallback image is generated.
   final ui.Image? customAtlasImage;
+
+  /// When `true`, attempts `images.load('drone_atlas.png')` before falling back
+  /// to the procedural drone sprite.
+  final bool loadBundledAtlasAsset;
 
   // ---- Engine-agnostic master state. See file header. ----
   late final DroneSwarmEconomy economy;
@@ -219,6 +223,13 @@ class DartUpGame extends FlameGame with TapCallbacks {
   Future<ui.Image> _resolveAtlasImage() async {
     if (customAtlasImage != null) {
       return customAtlasImage!;
+    }
+    if (loadBundledAtlasAsset) {
+      try {
+        return await images.load('drone_atlas.png');
+      } catch (_) {
+        // Fall through to procedural atlas generation
+      }
     }
     final ui.PictureRecorder recorder = ui.PictureRecorder();
     final ui.Canvas canvas = ui.Canvas(recorder);

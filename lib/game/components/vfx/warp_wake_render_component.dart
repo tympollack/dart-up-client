@@ -32,6 +32,8 @@ class WarpWakeRenderComponent extends PositionComponent {
         _wakeTimestamp = Float32List(maxWakes),
         _wakeBaseEnergy = Float32List(maxWakes),
         _wakeDecayRate = Float32List(maxWakes),
+        _wakeInitialConfidence = Float32List(maxWakes),
+        _wakeConfidenceDecayRate = Float32List(maxWakes),
         _wakeDriveType = Uint8List(maxWakes),
         _wakeIsSpoofed = Uint8List(maxWakes);
 
@@ -48,6 +50,8 @@ class WarpWakeRenderComponent extends PositionComponent {
   final Float32List _wakeTimestamp;
   final Float32List _wakeBaseEnergy;
   final Float32List _wakeDecayRate;
+  final Float32List _wakeInitialConfidence;
+  final Float32List _wakeConfidenceDecayRate;
   final Uint8List _wakeDriveType;
   final Uint8List _wakeIsSpoofed;
   int _activeWakeCount = 0;
@@ -104,9 +108,21 @@ class WarpWakeRenderComponent extends PositionComponent {
     _wakeTimestamp[slot] = wake.timestamp;
     _wakeBaseEnergy[slot] = wake.baseEnergySignature;
     _wakeDecayRate[slot] = wake.decayRate;
+    if (wake is SpoofedWarpWake) {
+      _wakeInitialConfidence[slot] = wake.initialConfidenceWeight;
+      _wakeConfidenceDecayRate[slot] = wake.confidenceDecayRate;
+      _wakeIsSpoofed[slot] = 1;
+    } else {
+      _wakeInitialConfidence[slot] = 1.0;
+      _wakeConfidenceDecayRate[slot] = 0.0;
+      _wakeIsSpoofed[slot] = 0;
+    }
     _wakeDriveType[slot] = wake.driveType.index;
-    _wakeIsSpoofed[slot] = wake.isSpoofed ? 1 : 0;
   }
+
+  /// Computes the current energy of pooled wake at [index] at simulation time [now].
+  double pooledWakeEnergyAt(int index, double now) =>
+      _computePooledWakeEnergy(index, now);
 
   @override
   void update(double dt) {
@@ -119,13 +135,13 @@ class WarpWakeRenderComponent extends PositionComponent {
       recordWake(latest);
     }
 
-    // Observe newly emitted ECM spoofed wakes
-    final List<SpoofedWarpWake> spoofs = warpController.spoofedWakes;
-    if (spoofs.length > _lastObservedSpoofCount) {
-      for (int i = _lastObservedSpoofCount; i < spoofs.length; i++) {
-        recordWake(spoofs[i]);
+    // Observe newly emitted ECM spoofed wakes without allocating a list copy
+    final int spoofCount = warpController.spoofedWakeCount;
+    if (spoofCount > _lastObservedSpoofCount) {
+      for (int i = _lastObservedSpoofCount; i < spoofCount; i++) {
+        recordWake(warpController.spoofedWakeAt(i));
       }
-      _lastObservedSpoofCount = spoofs.length;
+      _lastObservedSpoofCount = spoofCount;
     }
 
     // Prune wakes whose energy has decayed below visibility threshold (0.02)
@@ -142,15 +158,25 @@ class WarpWakeRenderComponent extends PositionComponent {
     final double dt = math.max(0.0, now - _wakeTimestamp[index]);
     final double base = _wakeBaseEnergy[index].clamp(0.0, 1.0);
     final double rate = _wakeDecayRate[index];
-    if (dt == 0.0) return base;
 
-    if (_wakeDriveType[index] == WarpDriveType.ftl.index) {
-      return (base * math.exp(-rate * dt)).clamp(0.0, 1.0);
+    final double rawEnergy;
+    if (dt == 0.0) {
+      rawEnergy = base;
+    } else if (_wakeDriveType[index] == WarpDriveType.ftl.index) {
+      rawEnergy = (base * math.exp(-rate * dt)).clamp(0.0, 1.0);
     } else {
       final double expPart = base * math.exp(-rate * 0.45 * dt);
       final double linearPart = rate * 0.30 * dt;
-      return (expPart - linearPart).clamp(0.0, 1.0);
+      rawEnergy = (expPart - linearPart).clamp(0.0, 1.0);
     }
+
+    if (_wakeIsSpoofed[index] == 1) {
+      final double confidence = (_wakeInitialConfidence[index] *
+              math.exp(-_wakeConfidenceDecayRate[index] * dt))
+          .clamp(0.0, 1.0);
+      return (rawEnergy * confidence).clamp(0.0, 1.0);
+    }
+    return rawEnergy;
   }
 
   void _swapRemoveWake(int index) {
@@ -163,6 +189,8 @@ class WarpWakeRenderComponent extends PositionComponent {
       _wakeTimestamp[index] = _wakeTimestamp[last];
       _wakeBaseEnergy[index] = _wakeBaseEnergy[last];
       _wakeDecayRate[index] = _wakeDecayRate[last];
+      _wakeInitialConfidence[index] = _wakeInitialConfidence[last];
+      _wakeConfidenceDecayRate[index] = _wakeConfidenceDecayRate[last];
       _wakeDriveType[index] = _wakeDriveType[last];
       _wakeIsSpoofed[index] = _wakeIsSpoofed[last];
     }

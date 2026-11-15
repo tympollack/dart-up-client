@@ -188,15 +188,25 @@ void main() {
       expect(wakeRenderer.activeWakeCount, equals(1));
 
       // Emit an ECM spoofed wake
-      warpController.emitSpoofedWake(
+      final spoofed = warpController.emitSpoofedWake(
         x: 50,
         y: 50,
         fakeTargetX: -500,
         fakeTargetY: 500,
         spoofedDriveType: WarpDriveType.ftl,
-      );
+        initialConfidenceWeight: 0.75,
+        confidenceDecayRate: 0.25,
+      )!;
       wakeRenderer.update(0.1);
       expect(wakeRenderer.activeWakeCount, equals(2));
+
+      // Verify pooled spoofed wake energy matches SpoofedWarpWake.currentEnergy exactly
+      final double simNow = warpController.simulationTime + 2.5;
+      final double elapsed = simNow - spoofed.timestamp;
+      expect(
+        wakeRenderer.pooledWakeEnergyAt(1, simNow),
+        closeTo(spoofed.currentEnergy(elapsed), 1e-5),
+      );
 
       // Trigger EnemyDirector sweep to populate ZoneOfProbability
       director.update(5.0, playerX: warpController.currentShipX, playerY: warpController.currentShipY);

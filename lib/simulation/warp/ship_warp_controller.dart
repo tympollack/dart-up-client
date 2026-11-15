@@ -321,6 +321,8 @@ class ShipWarpController {
 
   List<SpatialAnomaly> get anomalies => List.unmodifiable(_anomalies);
   List<SpoofedWarpWake> get spoofedWakes => List.unmodifiable(_spoofedWakes);
+  int get spoofedWakeCount => _spoofedWakes.length;
+  SpoofedWarpWake spoofedWakeAt(int index) => _spoofedWakes[index];
 
   void registerAnomaly(SpatialAnomaly anomaly) {
     _anomalies.add(anomaly);
