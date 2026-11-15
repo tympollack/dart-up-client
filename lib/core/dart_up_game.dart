@@ -29,6 +29,7 @@ import 'package:sd_client/swarm/drone_swarm_economy.dart';
 import 'package:sd_client/combat/enemy_director.dart';
 import 'package:sd_client/combat/enemy_fighter_render_component.dart';
 import 'package:sd_client/combat/fighter_roster.dart';
+import 'package:sd_client/game/components/vfx/warp_wake_render_component.dart';
 import 'package:sd_client/player/hacking_controller.dart';
 import 'package:sd_client/player/hacking_ui_component.dart';
 import 'package:sd_client/player/player_ship_component.dart';
@@ -38,6 +39,23 @@ import 'package:sd_client/swarm/swarm_isolate.dart';
 import 'package:sd_client/swarm/swarm_render_component.dart';
 
 class DartUpGame extends FlameGame with TapCallbacks {
+  DartUpGame({
+    this.spawnIsolateOnLoad = true,
+    this.customAtlasImage,
+    this.loadBundledAtlasAsset = false,
+  });
+
+  /// Whether to spawn the background swarm isolate during [onLoad].
+  /// Defaults to `true` in production; can be set to `false` in headless widget/unit tests.
+  final bool spawnIsolateOnLoad;
+
+  /// Optional pre-supplied atlas image for [SwarmRenderComponent].
+  final ui.Image? customAtlasImage;
+
+  /// When `true`, attempts `images.load('drone_atlas.png')` before falling back
+  /// to the procedural drone sprite.
+  final bool loadBundledAtlasAsset;
+
   // ---- Engine-agnostic master state. See file header. ----
   late final DroneSwarmEconomy economy;
   late final FighterRoster fighterRoster; // the PLAYER's own fighters
@@ -57,6 +75,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
   late final CelestialNodeComponent celestialNodeComponent;
   late final EnemyFighterRenderComponent enemyFighterRenderComponent;
   late final CombatVFXComponent combatVFXComponent;
+  late final WarpWakeRenderComponent warpWakeRenderComponent;
 
   // ---- Swarm isolate plumbing ----
   Isolate? _swarmIsolate;
@@ -169,10 +188,11 @@ class DartUpGame extends FlameGame with TapCallbacks {
     );
 
     // Adjust the asset path and source rect to your actual atlas layout.
-    final ui.Image atlasImage = await images.load('drone_atlas.png');
+    final ui.Image atlasImage = await _resolveAtlasImage();
     swarmRenderComponent = SwarmRenderComponent(
       atlasImage: atlasImage,
       spriteRect: const ui.Rect.fromLTWH(0, 0, 32, 32),
+      economy: economy,
     );
 
     hackingUIComponent = HackingUIComponent(controller: hackingController);
@@ -180,9 +200,14 @@ class DartUpGame extends FlameGame with TapCallbacks {
     enemyFighterRenderComponent = EnemyFighterRenderComponent(
       enemyFighterRoster: enemyFighterRoster,
     );
+    warpWakeRenderComponent = WarpWakeRenderComponent(
+      warpController: shipWarpController,
+      enemyDirector: enemyDirector,
+    );
 
     await addAll([
       celestialNodeComponent, // background: planets/nebulae
+      warpWakeRenderComponent, // warp wakes, sensor rings, spool pulse
       swarmRenderComponent, // player drone swarm
       enemyFighterRenderComponent, // enemy fighters
       shipComponent, // player ship
@@ -190,7 +215,28 @@ class DartUpGame extends FlameGame with TapCallbacks {
       combatVFXComponent, // laser flashes -- drawn last, on top of everything
     ]);
 
-    await _spawnSwarmIsolate();
+    if (spawnIsolateOnLoad) {
+      await _spawnSwarmIsolate();
+    }
+  }
+
+  Future<ui.Image> _resolveAtlasImage() async {
+    if (customAtlasImage != null) {
+      return customAtlasImage!;
+    }
+    if (loadBundledAtlasAsset) {
+      try {
+        return await images.load('drone_atlas.png');
+      } catch (_) {
+        // Fall through to procedural atlas generation
+      }
+    }
+    final ui.PictureRecorder recorder = ui.PictureRecorder();
+    final ui.Canvas canvas = ui.Canvas(recorder);
+    final ui.Paint paint = ui.Paint()..color = const ui.Color(0xFF00E5FF);
+    canvas.drawCircle(const ui.Offset(16, 16), 12, paint);
+    final ui.Picture picture = recorder.endRecording();
+    return picture.toImage(32, 32);
   }
 
   Future<void> _spawnSwarmIsolate() async {
