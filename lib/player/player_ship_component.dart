@@ -48,6 +48,14 @@ class PlayerShipComponent extends PositionComponent {
 
   final Paint _hullPaint = Paint()..color = const Color(0xFF6FD8FF);
 
+  /// Current cosmetic hull tint color.
+  Color get hullColor => _hullPaint.color;
+
+  /// Applies the cosmetic hull tint loaded from `@sunshade/assets` cabinet profile.
+  void applyHullTint(int argbHex) {
+    _hullPaint.color = Color(argbHex);
+  }
+
   /// The ship's true gameplay position, unaffected by the cosmetic shake.
   /// Feed THIS into DroneSwarmEconomy.update(shipX, shipY) -- never the
   /// shaking `position` -- so a visual effect can't leak into gameplay

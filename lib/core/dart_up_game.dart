@@ -30,24 +30,40 @@ import 'package:sd_client/combat/enemy_director.dart';
 import 'package:sd_client/combat/enemy_fighter_render_component.dart';
 import 'package:sd_client/combat/fighter_roster.dart';
 import 'package:sd_client/game/components/vfx/warp_wake_render_component.dart';
+import 'package:sd_client/hub/hub_client.dart';
 import 'package:sd_client/player/hacking_controller.dart';
 import 'package:sd_client/player/hacking_ui_component.dart';
 import 'package:sd_client/player/player_ship_component.dart';
 import 'package:sd_client/player/ship_warp_controller.dart';
+import 'package:sd_client/services/gladiator_and_cosmetics_service.dart';
 import 'package:sd_client/simulation/swarm/swarm_simulation.dart';
 import 'package:sd_client/swarm/swarm_isolate.dart';
 import 'package:sd_client/swarm/swarm_render_component.dart';
 
 class DartUpGame extends FlameGame with TapCallbacks {
   DartUpGame({
-    this.spawnIsolateOnLoad = true,
+    String? matchId,
+    HubApiService? hubApiService,
+    GladiatorMatchListener? gladiatorListener,
+    bool? enableSwarmIsolate,
+    bool spawnIsolateOnLoad = true,
     this.customAtlasImage,
     this.loadBundledAtlasAsset = false,
-  });
+  })  : matchId = matchId ?? HubClient.generateMatchId(),
+        _injectedHubApiService = hubApiService,
+        _injectedGladiatorListener = gladiatorListener,
+        spawnIsolateOnLoad = enableSwarmIsolate ?? spawnIsolateOnLoad;
+
+  final String matchId;
+  final HubApiService? _injectedHubApiService;
+  final GladiatorMatchListener? _injectedGladiatorListener;
 
   /// Whether to spawn the background swarm isolate during [onLoad].
   /// Defaults to `true` in production; can be set to `false` in headless widget/unit tests.
   final bool spawnIsolateOnLoad;
+
+  /// Backwards-compatible alias for [spawnIsolateOnLoad].
+  bool get enableSwarmIsolate => spawnIsolateOnLoad;
 
   /// Optional pre-supplied atlas image for [SwarmRenderComponent].
   final ui.Image? customAtlasImage;
@@ -55,7 +71,6 @@ class DartUpGame extends FlameGame with TapCallbacks {
   /// When `true`, attempts `images.load('drone_atlas.png')` before falling back
   /// to the procedural drone sprite.
   final bool loadBundledAtlasAsset;
-
   // ---- Engine-agnostic master state. See file header. ----
   late final DroneSwarmEconomy economy;
   late final FighterRoster fighterRoster; // the PLAYER's own fighters
@@ -67,6 +82,12 @@ class DartUpGame extends FlameGame with TapCallbacks {
   late final CombatManager combatManager;
   late final BoidsFlockingSolver boidsFlockingSolver;
   late final PlayerInteractionModel playerInteractionModel;
+
+  // ---- Ecosystem & Gladiator Services ----
+  late final HubApiService hubApiService;
+  late final GladiatorMatchListener gladiatorListener;
+  int _totalDronesHacked = 0;
+  int _engagedSquadCount = 0;
 
   // ---- Components ----
   late final PlayerShipComponent shipComponent;
@@ -86,6 +107,11 @@ class DartUpGame extends FlameGame with TapCallbacks {
   @override
   Future<void> onLoad() async {
     await super.onLoad();
+
+    hubApiService = _injectedHubApiService ?? HubClient.sharedService;
+    if (!hubApiService.isAuthenticated) {
+      hubApiService.authenticateFromUrl(Uri.base);
+    }
 
     economy = DroneSwarmEconomy(maxFleetSize: 300);
     fighterRoster = FighterRoster(maxFighterCount: 24);
@@ -124,7 +150,15 @@ class DartUpGame extends FlameGame with TapCallbacks {
     hackingController = HackingController(
       economy: economy,
       onHackSuccess: (result) {
-        // Hook your hack-success VFX/SFX here.
+        _totalDronesHacked += result.dronesHacked;
+        if (_totalDronesHacked >= 3) {
+          unawaited(
+            hubApiService.triggerMilestoneAchievement(
+              DartUpMilestoneFeat.smugglerRingCrack,
+              matchId: matchId,
+            ),
+          );
+        }
       },
     );
 
@@ -162,7 +196,15 @@ class DartUpGame extends FlameGame with TapCallbacks {
       enemyFighterRoster: enemyFighterRoster,
       playerShipController: shipWarpController,
       onSquadEngaged: (squadIndex) {
-        // Hook your "incoming!" alert SFX/HUD here.
+        _engagedSquadCount++;
+        if (_engagedSquadCount >= 2) {
+          unawaited(
+            hubApiService.triggerMilestoneAchievement(
+              DartUpMilestoneFeat.threeWayAmbush,
+              matchId: matchId,
+            ),
+          );
+        }
       },
     );
     // Beyond what you asked for, but the Director would otherwise be
@@ -172,6 +214,22 @@ class DartUpGame extends FlameGame with TapCallbacks {
     // arrival).
     enemyDirector.spawnSquad(900, 900);
     enemyDirector.spawnSquad(-900, 600);
+
+    // ---- Gladiator & Cosmetics ------------------------------------------
+    gladiatorListener = _injectedGladiatorListener ??
+        GladiatorMatchListener(
+          hubApiService: hubApiService,
+          economy: economy,
+          warpController: shipWarpController,
+          enemyDirector: enemyDirector,
+        );
+    final matchChannel = hubApiService.subscribeToMatchChannel(matchId);
+    gladiatorListener.attachToChannel(matchChannel);
+    unawaited(
+      gladiatorListener.loadEquippedCosmetics().then((manifest) {
+        shipComponent.applyHullTint(manifest.primaryTintHex);
+      }),
+    );
 
     // ---- Combat ---------------------------------------------------------
     // combatVFXComponent must exist BEFORE combatManager is constructed:
@@ -237,6 +295,35 @@ class DartUpGame extends FlameGame with TapCallbacks {
     canvas.drawCircle(const ui.Offset(16, 16), 12, paint);
     final ui.Picture picture = recorder.endRecording();
     return picture.toImage(32, 32);
+  }
+
+  /// Submits the verified match result to the SunShade Hub API and triggers
+  /// any end-of-match milestone feats.
+  Future<MatchSubmissionResult> completeMatch({
+    required String outcome,
+    String opponentName = 'Star Dart Boss',
+    int moves = 0,
+    int durationSeconds = 0,
+  }) async {
+    if (outcome.toLowerCase() == 'victory') {
+      await hubApiService.triggerMilestoneAchievement(
+        DartUpMilestoneFeat.starDartSiegeSurvivor,
+        matchId: matchId,
+      );
+    }
+
+    return hubApiService.submitMatchResult(
+      MatchSummary(
+        matchId: matchId,
+        opponentName: opponentName,
+        outcome: outcome,
+        moves: moves,
+        durationSeconds: durationSeconds,
+        dronesDeployed: economy.deployedCount,
+        dronesHacked: _totalDronesHacked,
+        featsUnlocked: hubApiService.unlockedFeatIds.toList(),
+      ),
+    );
   }
 
   Future<void> _spawnSwarmIsolate() async {
@@ -306,6 +393,9 @@ class DartUpGame extends FlameGame with TapCallbacks {
 
   @override
   void onRemove() {
+    if (_injectedGladiatorListener == null) {
+      gladiatorListener.dispose();
+    }
     _swarmCommandPort?.send(kShutdownCommand);
     _swarmReceivePort?.close();
     _swarmIsolate?.kill(priority: Isolate.immediate);
