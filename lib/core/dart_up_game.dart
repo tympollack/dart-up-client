@@ -29,6 +29,7 @@ import 'package:sd_client/swarm/drone_swarm_economy.dart';
 import 'package:sd_client/combat/enemy_director.dart';
 import 'package:sd_client/combat/enemy_fighter_render_component.dart';
 import 'package:sd_client/combat/fighter_roster.dart';
+import 'package:sd_client/game/components/vfx/warp_wake_render_component.dart';
 import 'package:sd_client/player/hacking_controller.dart';
 import 'package:sd_client/player/hacking_ui_component.dart';
 import 'package:sd_client/player/player_ship_component.dart';
@@ -70,6 +71,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
   late final CelestialNodeComponent celestialNodeComponent;
   late final EnemyFighterRenderComponent enemyFighterRenderComponent;
   late final CombatVFXComponent combatVFXComponent;
+  late final WarpWakeRenderComponent warpWakeRenderComponent;
 
   // ---- Swarm isolate plumbing ----
   Isolate? _swarmIsolate;
@@ -194,9 +196,14 @@ class DartUpGame extends FlameGame with TapCallbacks {
     enemyFighterRenderComponent = EnemyFighterRenderComponent(
       enemyFighterRoster: enemyFighterRoster,
     );
+    warpWakeRenderComponent = WarpWakeRenderComponent(
+      warpController: shipWarpController,
+      enemyDirector: enemyDirector,
+    );
 
     await addAll([
       celestialNodeComponent, // background: planets/nebulae
+      warpWakeRenderComponent, // warp wakes, sensor rings, spool pulse
       swarmRenderComponent, // player drone swarm
       enemyFighterRenderComponent, // enemy fighters
       shipComponent, // player ship

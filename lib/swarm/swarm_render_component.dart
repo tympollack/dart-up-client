@@ -46,6 +46,28 @@ class SwarmRenderComponent extends PositionComponent {
   Float32List? _rstTransforms; // rebuilt every render() call
   int _entityCount = 0;
 
+  final ui.Paint _atlasPaint = ui.Paint();
+  final ui.Paint _refitRingPaint = ui.Paint()
+    ..style = ui.PaintingStyle.stroke
+    ..strokeWidth = 1.8
+    ..color = const ui.Color(0xFFFFA726);
+  final ui.Paint _operationalDotPaint = ui.Paint()
+    ..style = ui.PaintingStyle.fill
+    ..color = const ui.Color(0xFF00E5FF);
+
+  int get entityCount => _entityCount;
+
+  /// Count of currently deployed drones flagged with `needsRefit == true`.
+  int get needsRefitDroneCount {
+    final DroneSwarmEconomy? econ = economy;
+    if (econ == null) return 0;
+    int count = 0;
+    for (int i = 0; i < econ.deployedCount; i++) {
+      if (econ.needsRefit[i] == 1) count++;
+    }
+    return count;
+  }
+
   /// Called by DartUpGame whenever a fresh frame arrives from the swarm
   /// isolate. Pure data hand-off: store the reference, and -- only the
   /// very first time, since entity count never changes mid-game -- size
@@ -74,40 +96,62 @@ class SwarmRenderComponent extends PositionComponent {
     final Float32List? frame = _frame;
     final Float32List? rects = _rects;
     final Float32List? transforms = _rstTransforms;
-    if (frame == null || rects == null || transforms == null) return;
+    if (frame != null && rects != null && transforms != null) {
+      final double halfW = spriteRect.width / 2;
+      final double halfH = spriteRect.height / 2;
 
-    final double halfW = spriteRect.width / 2;
-    final double halfH = spriteRect.height / 2;
+      // Repack [x, y, rotation, scale] -> RSTransform's packed
+      // [scos, ssin, tx, ty] form, anchored at the sprite's center.
+      for (int i = 0; i < _entityCount; i++) {
+        final int src = i * 4;
+        final double x = frame[src];
+        final double y = frame[src + 1];
+        final double rotation = frame[src + 2];
+        final double scale = frame[src + 3];
 
-    // Repack [x, y, rotation, scale] -> RSTransform's packed
-    // [scos, ssin, tx, ty] form, anchored at the sprite's center. This is
-    // GPU-format bookkeeping, not simulation -- the physics already
-    // happened in the isolate before this buffer ever arrived here.
-    for (int i = 0; i < _entityCount; i++) {
-      final int src = i * 4;
-      final double x = frame[src];
-      final double y = frame[src + 1];
-      final double rotation = frame[src + 2];
-      final double scale = frame[src + 3];
+        final double cosScaled = math.cos(rotation) * scale;
+        final double sinScaled = math.sin(rotation) * scale;
 
-      final double cosScaled = math.cos(rotation) * scale;
-      final double sinScaled = math.sin(rotation) * scale;
+        final int dst = i * 4;
+        transforms[dst] = cosScaled;
+        transforms[dst + 1] = sinScaled;
+        transforms[dst + 2] = x - (cosScaled * halfW - sinScaled * halfH);
+        transforms[dst + 3] = y - (sinScaled * halfW + cosScaled * halfH);
+      }
 
-      final int dst = i * 4;
-      transforms[dst] = cosScaled;
-      transforms[dst + 1] = sinScaled;
-      transforms[dst + 2] = x - (cosScaled * halfW - sinScaled * halfH);
-      transforms[dst + 3] = y - (sinScaled * halfW + cosScaled * halfH);
+      canvas.drawRawAtlas(
+        atlasImage,
+        transforms,
+        rects,
+        null, // no per-sprite color tint
+        ui.BlendMode.srcOver,
+        null, // no cull rect -- the flock roams the whole world
+        _atlasPaint,
+      );
     }
 
-    canvas.drawRawAtlas(
-      atlasImage,
-      transforms,
-      rects,
-      null, // no per-sprite color tint
-      ui.BlendMode.srcOver,
-      null, // no cull rect -- the flock roams the whole world
-      ui.Paint(),
-    );
+    // Render deployed economy drones and needsRefit status indicators.
+    final DroneSwarmEconomy? econ = economy;
+    if (econ != null) {
+      for (int i = 0; i < econ.deployedCount; i++) {
+        final double dx = econ.posX[i];
+        final double dy = econ.posY[i];
+        final ui.Offset center = ui.Offset(dx, dy);
+        if (econ.needsRefit[i] == 1) {
+          canvas.drawCircle(center, 7.0, _refitRingPaint);
+        } else {
+          canvas.drawCircle(center, 3.0, _operationalDotPaint);
+        }
+      }
+    }
+  }
+
+  @override
+  void onRemove() {
+    _frame = null;
+    _rects = null;
+    _rstTransforms = null;
+    _entityCount = 0;
+    super.onRemove();
   }
 }
