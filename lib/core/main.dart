@@ -143,13 +143,22 @@ class DartUpGame extends FlameGame with TapCallbacks {
     // This is the ONLY place these get ticked. Everything downstream
     // (components) only ever reads the results of these calls -- never
     // recomputes them.
+    shipWarpController.update(dt);
+    if (shipWarpController.isSubwarpInTransit) {
+      shipComponent.setBasePosition(
+        Vector2(
+          shipWarpController.currentShipX,
+          shipWarpController.currentShipY,
+        ),
+      );
+    }
+
     economy.update(
       dt,
       shipX: shipComponent.basePosition.x,
       shipY: shipComponent.basePosition.y,
     );
     hackingController.update(dt);
-    shipWarpController.update(dt);
 
     _swarmCommandPort?.send(SwarmTickMessage(dt));
   }
