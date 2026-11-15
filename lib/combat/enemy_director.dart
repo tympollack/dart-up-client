@@ -289,11 +289,24 @@ class EnemyDirector {
   /// physically found the player, sensor uncertainty is no longer
   /// relevant to them.
   void _performSweep() {
-    final WarpWake? wake = playerShipController.lastWake;
+    final double now = playerShipController.simulationTime;
+    WarpWake? wake = playerShipController.lastWake;
+    double bestEnergy = wake != null
+        ? wake.currentEnergy(math.max(0.0, now - wake.timestamp))
+        : -1.0;
+
+    for (final SpoofedWarpWake spoof in playerShipController.spoofedWakes) {
+      final double spoofEnergy =
+          spoof.currentEnergy(math.max(0.0, now - spoof.timestamp));
+      if (spoofEnergy > bestEnergy) {
+        bestEnergy = spoofEnergy;
+        wake = spoof;
+      }
+    }
+
     if (wake == null) return; // the player has never jumped -- nothing to read
 
-    final double timeSinceJump =
-        playerShipController.simulationTime - wake.timestamp;
+    final double timeSinceJump = now - wake.timestamp;
     final SensorModule sensor =
         SensorModule(tier: sensorTechTier, trackingTech: trackingTech);
 
@@ -345,10 +358,14 @@ class EnemyDirector {
           break;
 
         case TrackingOutcome.pinpoint:
-          // Strong lock -- go straight for the player's live position,
-          // not the (by now possibly stale) departure point.
-          targetX[i] = _lastPlayerX;
-          targetY[i] = _lastPlayerY;
+          // If locked onto a spoofed decoy trail, lure squads toward the
+          // decoy's target coordinates rather than the real ship!
+          targetX[i] = result.isSpoofedTrail
+              ? (result.targetX ?? wake.x)
+              : _lastPlayerX;
+          targetY[i] = result.isSpoofedTrail
+              ? (result.targetY ?? wake.y)
+              : _lastPlayerY;
           _setState(i, EnemySquadState.engage);
           break;
       }

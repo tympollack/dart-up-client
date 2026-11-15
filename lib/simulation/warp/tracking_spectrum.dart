@@ -277,8 +277,15 @@ double computeSpectrumSignalStrength({
   required double hunterDetectionTech,
   required double timeSinceJump,
   double obscurityMultiplier = 1.0,
+  double? signalDecayPerSecond,
 }) {
-  final double energy = wake.currentEnergy(timeSinceJump);
+  final double dt = math.max(0.0, timeSinceJump);
+  final double baseEnergy = signalDecayPerSecond != null
+      ? (wake.baseEnergySignature - signalDecayPerSecond * dt).clamp(0.0, 1.0)
+      : wake.currentEnergy(dt);
+  final double energy = wake is SpoofedWarpWake && signalDecayPerSecond != null
+      ? (baseEnergy * wake.confidenceAt(dt)).clamp(0.0, 1.0)
+      : baseEnergy;
   if (energy <= 0.0) return 0.0;
 
   // Contest function of (hunterDetectionTech - fleeingEcm):
@@ -306,6 +313,7 @@ TrackingResult? evaluateWakeTrace({
   required double readerY,
   int sensorTier = 1,
   double obscurityMultiplier = 1.0,
+  double? signalDecayPerSecond,
   double highSignalThreshold = 0.65,
   double lostTraceThreshold = 0.20,
   double baseUncertaintyScale = 1200.0,
@@ -317,6 +325,7 @@ TrackingResult? evaluateWakeTrace({
     hunterDetectionTech: hunterDetectionTech,
     timeSinceJump: timeSinceJump,
     obscurityMultiplier: obscurityMultiplier,
+    signalDecayPerSecond: signalDecayPerSecond,
   );
 
   if (signalStrength < lostTraceThreshold) {
@@ -335,9 +344,9 @@ TrackingResult? evaluateWakeTrace({
     final double dy = exactY - readerY;
     final double dist = math.sqrt(dx * dx + dy * dy);
     final double dirX =
-        wake.vectorX ?? (dist > 0 ? dx / dist : 0.0);
+        dist > 0 ? dx / dist : (wake.vectorX ?? 0.0);
     final double dirY =
-        wake.vectorY ?? (dist > 0 ? dy / dist : 1.0);
+        dist > 0 ? dy / dist : (wake.vectorY ?? 1.0);
 
     return TrackingResult.pinpoint(
       signalStrength: signalStrength,
@@ -379,7 +388,7 @@ TrackingResult readWake({
   required double timeSinceJump,
   required double readerX,
   required double readerY,
-  double signalDecayPerSecond = 0.05,
+  double? signalDecayPerSecond,
   double pinpointThreshold = 0.65,
   double lostTraceThreshold = 0.20,
   double obscurityMultiplier = 1.0,
@@ -396,6 +405,7 @@ TrackingResult readWake({
     readerY: readerY,
     sensorTier: sensor.tier,
     obscurityMultiplier: obscurityMultiplier,
+    signalDecayPerSecond: signalDecayPerSecond,
     highSignalThreshold: pinpointThreshold,
     lostTraceThreshold: lostTraceThreshold,
   );

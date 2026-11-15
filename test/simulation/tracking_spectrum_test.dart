@@ -26,8 +26,8 @@ void main() {
         wake: wake,
         hunterDetectionTech: 0.50,
         timeSinceJump: 1.0,
-        readerX: 0.0,
-        readerY: 0.0,
+        readerX: 1500.0,
+        readerY: 50.0,
       );
 
       expect(result, isNotNull);
@@ -35,8 +35,9 @@ void main() {
       expect(result.signalStrength, greaterThanOrEqualTo(0.65));
       expect(result.targetX, equals(1500.0));
       expect(result.targetY, equals(1050.0));
-      expect(result.directionX, closeTo(0.8, 1e-6));
-      expect(result.directionY, closeTo(0.6, 1e-6));
+      // Bearing from reader (1500, 50) to exact target (1500, 1050) is (0.0, 1.0)
+      expect(result.directionX, closeTo(0.0, 1e-6));
+      expect(result.directionY, closeTo(1.0, 1e-6));
       expect(result.pulseIntensity, greaterThanOrEqualTo(0.65));
       expect(result.zoneOfProbability, isNull);
     });
@@ -106,6 +107,17 @@ void main() {
         obscurityMultiplier: 0.25,
       );
       expect(blindFallback.outcome, equals(TrackingOutcome.blind));
+
+      // Explicit signalDecayPerSecond override in readWake forces linear decay
+      final rapidDecayOverride = readWake(
+        wake: wake,
+        sensor: const SensorModule(tier: 1, trackingTech: 0.30),
+        timeSinceJump: 2.0,
+        readerX: 0.0,
+        readerY: 0.0,
+        signalDecayPerSecond: 0.40, // 0.85 - 0.80 = 0.05 (< 0.20 lostTraceThreshold)
+      );
+      expect(rapidDecayOverride.outcome, equals(TrackingOutcome.blind));
     });
 
     test('Active ECM Spoofing expends ECM charge and emits SpoofedWarpWake false trails with decaying confidence weights', () {

@@ -218,12 +218,21 @@ class DartUpGame extends FlameGame with TapCallbacks {
     // This is the ONLY place these get ticked. Everything downstream
     // (components) only ever reads the results of these calls -- never
     // recomputes them.
+    shipWarpController.update(dt);
+    if (shipWarpController.isSubwarpInTransit) {
+      shipComponent.setBasePosition(
+        Vector2(
+          shipWarpController.currentShipX,
+          shipWarpController.currentShipY,
+        ),
+      );
+    }
+
     final double playerX = shipComponent.basePosition.x;
     final double playerY = shipComponent.basePosition.y;
 
     economy.update(dt, shipX: playerX, shipY: playerY);
     hackingController.update(dt);
-    shipWarpController.update(dt);
 
     // Order matters here: EnemyDirector may spawn fresh enemy fighters
     // this tick (a squad engaging for the first time); running

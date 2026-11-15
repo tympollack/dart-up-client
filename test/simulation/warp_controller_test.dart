@@ -155,6 +155,53 @@ void main() {
       expect(controller.lastCollidedAnomaly?.id, equals('grav-well-1'));
       expect(controller.shipDecay, closeTo(0.25, 1e-4));
       expect(lastResult!.collidedAnomaly?.id, equals('grav-well-1'));
+
+      // Swept segment intersection catches narrow anomalies on fast ticks AND
+      // non-pulling anomalies only apply penalty once per transit across multi-ticks
+      controller.update(2.5);
+      controller.clearAnomalies();
+      controller.shipDecay = 0.0;
+      controller.registerAnomaly(const SpatialAnomaly(
+        id: 'radiation-belt',
+        x: 300.0,
+        y: 0.0,
+        radius: 150.0,
+        energyDamage: 15.0,
+        decayPenalty: 0.12,
+        pullsOutOfSubwarp: false,
+      ));
+      controller.registerAnomaly(const SpatialAnomaly(
+        id: 'thin-snare',
+        x: 800.0,
+        y: 0.0,
+        radius: 10.0,
+        energyDamage: 10.0,
+        decayPenalty: 0.08,
+        pullsOutOfSubwarp: true,
+      ));
+
+      controller.commandWarp(
+        targetNode: targetPlanet,
+        shipX: 0.0,
+        shipY: 0.0,
+        driveType: WarpDriveType.subwarp,
+      );
+      controller.update(5.0); // Enter Subwarp
+
+      // Multiple small ticks inside radiation-belt (x=150..450) only apply 0.12 decay once
+      controller.update(0.3); // x = 180
+      controller.update(0.2); // x = 300
+      controller.update(0.2); // x = 420
+      expect(controller.shipDecay, closeTo(0.12, 1e-5));
+      expect(controller.isSubwarpInTransit, isTrue);
+
+      // Large 1.0s tick jumps from x=420 to x=1020 across thin-snare (x=800, r=10)
+      // Swept check catches thin-snare at entry (x = 790) and pulls ship out of Subwarp
+      controller.update(1.0);
+      expect(controller.isSubwarpInTransit, isFalse);
+      expect(controller.lastCollidedAnomaly?.id, equals('thin-snare'));
+      expect(controller.shipDecay, closeTo(0.20, 1e-5));
+      expect(lastResult!.arrival.x, closeTo(790.0, 1e-3));
     });
 
     test('FTL and Subwarp WarpWake signatures follow distinct energy decay curves', () {

@@ -45,6 +45,36 @@ class SpatialAnomaly {
     final dy = py - y;
     return dx * dx + dy * dy <= radius * radius;
   }
+
+  /// Returns the earliest intersection parameter `t` in `[0.0, 1.0]` along the
+  /// segment `(x0, y0) -> (x1, y1)`, or `null` if the segment does not touch
+  /// this anomaly's circle.
+  double? firstIntersectionT(double x0, double y0, double x1, double y1) {
+    final fx = x0 - x;
+    final fy = y0 - y;
+    final rSq = radius * radius;
+    if (fx * fx + fy * fy <= rSq) {
+      return 0.0;
+    }
+
+    final dx = x1 - x0;
+    final dy = y1 - y0;
+    final a = dx * dx + dy * dy;
+    if (a <= 1e-12) return null;
+
+    final b = 2.0 * (fx * dx + fy * dy);
+    final c = fx * fx + fy * fy - rSq;
+    final discriminant = b * b - 4.0 * a * c;
+    if (discriminant < 0.0) return null;
+
+    final sqrtDisc = math.sqrt(discriminant);
+    final t1 = (-b - sqrtDisc) / (2.0 * a);
+    final t2 = (-b + sqrtDisc) / (2.0 * a);
+
+    if (t1 >= 0.0 && t1 <= 1.0) return t1;
+    if (t2 >= 0.0 && t2 <= 1.0) return t2;
+    return null;
+  }
 }
 
 /// Tunables for navigation, FTL scatter, Subwarp transit, and WarpWake signatures.
@@ -210,6 +240,7 @@ class ShipWarpController {
   SpatialAnomaly? _collidedAnomaly;
 
   final List<SpatialAnomaly> _anomalies = [];
+  final Set<String> _hitAnomalyIdsInCurrentTransit = {};
   final List<SpoofedWarpWake> _spoofedWakes = [];
 
   CelestialNode? _targetNode;
@@ -449,6 +480,7 @@ class ShipWarpController {
     _abortedEarly = false;
     _wasInterceptedMidTransit = false;
     _collidedAnomaly = null;
+    _hitAnomalyIdsInCurrentTransit.clear();
     _currentDockedNode = null;
 
     _state = WarpState.spooling;
@@ -593,6 +625,8 @@ class ShipWarpController {
   }
 
   void _stepSubwarpTransit(double dt) {
+    final double prevX = _currentShipX;
+    final double prevY = _currentShipY;
     final double stepTime = math.min(dt, _transitTimeRemaining);
     final double stepDist = navConfig.subwarpSpeed * stepTime;
 
@@ -600,17 +634,38 @@ class ShipWarpController {
     _currentShipY += _flightVectorY * stepDist;
     _transitTimeRemaining -= stepTime;
 
-    // Check mid-flight spatial anomalies along physical traversal path
+    // Swept segment-circle intersection along (prevX, prevY) -> (_currentShipX, _currentShipY)
+    // ordered by earliest contact t so fast ticks cannot skip anomalies and
+    // non-pulling anomalies only penalize the ship once per transit.
+    final List<({SpatialAnomaly anomaly, double t})> hits = [];
     for (final anomaly in _anomalies) {
-      if (anomaly.intersects(_currentShipX, _currentShipY)) {
-        _collidedAnomaly = anomaly;
-        applyIncomingDamage(anomaly.energyDamage);
-        shipDecay = (shipDecay + anomaly.decayPenalty).clamp(0.0, 1.0);
-        if (anomaly.pullsOutOfSubwarp) {
-          _wasInterceptedMidTransit = true;
-          _finishSubwarpAt(_currentShipX, _currentShipY);
-          return;
-        }
+      if (_hitAnomalyIdsInCurrentTransit.contains(anomaly.id)) continue;
+      final t = anomaly.firstIntersectionT(
+        prevX,
+        prevY,
+        _currentShipX,
+        _currentShipY,
+      );
+      if (t != null) {
+        hits.add((anomaly: anomaly, t: t));
+      }
+    }
+    hits.sort((a, b) => a.t.compareTo(b.t));
+
+    for (final hit in hits) {
+      final anomaly = hit.anomaly;
+      _hitAnomalyIdsInCurrentTransit.add(anomaly.id);
+      _collidedAnomaly = anomaly;
+      applyIncomingDamage(anomaly.energyDamage);
+      shipDecay = (shipDecay + anomaly.decayPenalty).clamp(0.0, 1.0);
+      if (anomaly.pullsOutOfSubwarp) {
+        _wasInterceptedMidTransit = true;
+        final hitX = prevX + (_currentShipX - prevX) * hit.t;
+        final hitY = prevY + (_currentShipY - prevY) * hit.t;
+        _currentShipX = hitX;
+        _currentShipY = hitY;
+        _finishSubwarpAt(hitX, hitY);
+        return;
       }
     }
 
