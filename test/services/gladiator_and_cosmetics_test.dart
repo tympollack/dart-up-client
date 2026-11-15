@@ -96,6 +96,7 @@ void main() {
       expect(supplyRecord.injectionLatency.inMilliseconds, lessThan(250));
       expect(supplyRecord.energyRestored, closeTo(35.0, 1e-4));
       expect(warpController.shipEnergy, closeTo(75.0, 1e-4));
+      expect(economy.availableCount, equals(12)); // Started at 10, replenished +2 reserves
 
       listener.dispose();
       hubService.dispose();
@@ -181,6 +182,37 @@ void main() {
 
       expect(listener.spawnRecords, isEmpty);
       expect(warpController.anomalies, isEmpty);
+      hubService.dispose();
+    });
+
+    test('Malformed drop payloads without recognized drop type are safely ignored without hazard creation', () {
+      final hubService = HubApiService();
+      final economy = DroneSwarmEconomy(maxFleetSize: 20);
+      final warpController = ShipWarpController(
+        economy: economy,
+        fighterRoster: FighterRoster(maxFighterCount: 4),
+      );
+
+      final listener = GladiatorMatchListener(
+        hubApiService: hubService,
+        economy: economy,
+        warpController: warpController,
+      );
+
+      final channel = hubService.subscribeToMatchChannel('malformed_test_match');
+      listener.attachToChannel(channel);
+
+      channel.emitSimulatedBroadcast('gladiator_drop', {
+        'drop_id': 'corrupted_01',
+        'type': 'unrecognized_random_command',
+        'x': 50.0,
+        'y': 50.0,
+      });
+
+      expect(listener.spawnRecords, isEmpty);
+      expect(warpController.anomalies, isEmpty);
+
+      listener.dispose();
       hubService.dispose();
     });
   });

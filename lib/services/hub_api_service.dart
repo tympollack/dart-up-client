@@ -361,7 +361,7 @@ class HubApiService {
     http.Client? httpClient,
     this.maxRetries = 3,
     this.retryDelay = const Duration(milliseconds: 20),
-    this.realtimePollInterval,
+    this.realtimePollInterval = const Duration(seconds: 2),
   })  : _ownsHttpClient = httpClient == null,
         _httpClient = httpClient ?? http.Client();
 
@@ -379,6 +379,7 @@ class HubApiService {
   bool _disposed = false;
 
   final Set<String> _unlockedFeatIds = {};
+  final Map<String, Set<String>> _matchUnlockedFeats = {};
   final Set<String> _syncedFeatIds = {};
   final Set<String> _inFlightFeatIds = {};
   final List<AchievementToastNotification> _toastHistory = [];
@@ -403,6 +404,10 @@ class HubApiService {
   List<AchievementToastNotification> get toastHistory =>
       List.unmodifiable(_toastHistory);
   Set<String> get unlockedFeatIds => Set.unmodifiable(_unlockedFeatIds);
+
+  /// Returns the set of feat IDs unlocked specifically during [matchId].
+  Set<String> unlockedFeatIdsForMatch(String matchId) =>
+      Set.unmodifiable(_matchUnlockedFeats[matchId] ?? {});
   Set<String> get syncedFeatIds => Set.unmodifiable(_syncedFeatIds);
 
   Stream<SpectatorCheerEvent> get spectatorCheers =>
@@ -597,6 +602,7 @@ class HubApiService {
 
     final bool wasAlreadyUnlockedLocally = _unlockedFeatIds.contains(feat.id);
     _unlockedFeatIds.add(feat.id);
+    _matchUnlockedFeats.putIfAbsent(matchId, () => {}).add(feat.id);
     _inFlightFeatIds.add(feat.id);
 
     bool synced = false;

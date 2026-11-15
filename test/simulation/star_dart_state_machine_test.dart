@@ -159,5 +159,21 @@ void main() {
       expect(boss.state, equals(StarDartBossState.crippledDerelict));
       expect(boss.derelictEscapeRemainingSeconds, closeTo(5.0, 1e-5));
     });
+
+    test('Boss spawned outside breach radius initializes shields and hull before triggering cataclysm callback', () {
+      final boss = StarDartStateMachine(
+        initialX: 6000.0,
+        initialY: 0.0,
+        config: const StarDartConfig(
+          maxShields: 180.0,
+          maxHull: 240.0,
+          deepSectorBreachRadius: 4000.0,
+        ),
+      );
+
+      expect(boss.globalSiegeAlertLevel, equals(1));
+      expect(boss.shields, equals(180.0));
+      expect(boss.hull, equals(240.0));
+    });
   });
 }

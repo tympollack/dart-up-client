@@ -48,12 +48,36 @@ class PlayerShipComponent extends PositionComponent {
 
   final Paint _hullPaint = Paint()..color = const Color(0xFF6FD8FF);
 
+  String? _equippedHullSkinId;
+  String? _equippedHullSkinUrl;
+  String? _equippedTrailSkinId;
+  String? _equippedTrailSkinUrl;
+
   /// Current cosmetic hull tint color.
   Color get hullColor => _hullPaint.color;
+  String? get equippedHullSkinId => _equippedHullSkinId;
+  String? get equippedHullSkinUrl => _equippedHullSkinUrl;
+  String? get equippedTrailSkinId => _equippedTrailSkinId;
+  String? get equippedTrailSkinUrl => _equippedTrailSkinUrl;
 
   /// Applies the cosmetic hull tint loaded from `@sunshade/assets` cabinet profile.
   void applyHullTint(int argbHex) {
     _hullPaint.color = Color(argbHex);
+  }
+
+  /// Configures equipped cosmetic skin manifests from `@sunshade/assets` CDN URLs.
+  void applyCosmeticManifest({
+    required int primaryTintHex,
+    String? hullSkinId,
+    String? hullSkinUrl,
+    String? trailSkinId,
+    String? trailSkinUrl,
+  }) {
+    applyHullTint(primaryTintHex);
+    _equippedHullSkinId = hullSkinId;
+    _equippedHullSkinUrl = hullSkinUrl;
+    _equippedTrailSkinId = trailSkinId;
+    _equippedTrailSkinUrl = trailSkinUrl;
   }
 
   /// The ship's true gameplay position, unaffected by the cosmetic shake.

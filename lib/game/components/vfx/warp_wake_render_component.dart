@@ -57,7 +57,7 @@ class WarpWakeRenderComponent extends PositionComponent {
   int _activeWakeCount = 0;
 
   WarpWake? _lastObservedControllerWake;
-  int _lastObservedSpoofCount = 0;
+  SpoofedWarpWake? _lastObservedSpoofedWake;
 
   static const Color subwarpTrailColor = Color(0xFF00E5FF);
   static const Color ftlTearColor = Color(0xFFD500F9);
@@ -135,13 +135,11 @@ class WarpWakeRenderComponent extends PositionComponent {
       recordWake(latest);
     }
 
-    // Observe newly emitted ECM spoofed wakes without allocating a list copy
-    final int spoofCount = warpController.spoofedWakeCount;
-    if (spoofCount > _lastObservedSpoofCount) {
-      for (int i = _lastObservedSpoofCount; i < spoofCount; i++) {
-        recordWake(warpController.spoofedWakeAt(i));
-      }
-      _lastObservedSpoofCount = spoofCount;
+    // Observe newly emitted ECM spoofed wakes without relying on fragile list indexing
+    final SpoofedWarpWake? latestSpoof = warpController.lastSpoofedWake;
+    if (latestSpoof != null && !identical(latestSpoof, _lastObservedSpoofedWake)) {
+      _lastObservedSpoofedWake = latestSpoof;
+      recordWake(latestSpoof);
     }
 
     // Prune wakes whose energy has decayed below visibility threshold (0.02)
@@ -268,7 +266,7 @@ class WarpWakeRenderComponent extends PositionComponent {
   void onRemove() {
     _activeWakeCount = 0;
     _lastObservedControllerWake = null;
-    _lastObservedSpoofCount = 0;
+    _lastObservedSpoofedWake = null;
     super.onRemove();
   }
 }

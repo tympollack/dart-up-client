@@ -54,7 +54,7 @@ class GladiatorDropEvent {
     required this.receivedAt,
   });
 
-  factory GladiatorDropEvent.fromPayload(
+  static GladiatorDropEvent? tryParse(
     Map<String, dynamic> payload, {
     DateTime? receivedAt,
   }) {
@@ -63,11 +63,12 @@ class GladiatorDropEvent {
             ? payload['payload'] as Map<String, dynamic>
             : payload;
 
-    final String rawType =
-        (inner['drop_type'] ?? inner['command'] ?? inner['type'] ?? 'solar_flare')
-            .toString();
-    final GladiatorDropType resolvedType =
-        GladiatorDropType.fromWire(rawType) ?? GladiatorDropType.solarFlare;
+    final dynamic rawTypeVal =
+        inner['drop_type'] ?? inner['command'] ?? inner['type'];
+    if (rawTypeVal == null) return null;
+    final GladiatorDropType? resolvedType =
+        GladiatorDropType.fromWire(rawTypeVal.toString());
+    if (resolvedType == null) return null;
 
     return GladiatorDropEvent(
       dropId: (inner['drop_id'] ?? inner['id'] ?? 'drop_0').toString(),
@@ -80,6 +81,20 @@ class GladiatorDropEvent {
               .toString(),
       receivedAt: receivedAt ?? DateTime.now().toUtc(),
     );
+  }
+
+  factory GladiatorDropEvent.fromPayload(
+    Map<String, dynamic> payload, {
+    DateTime? receivedAt,
+  }) {
+    return tryParse(payload, receivedAt: receivedAt) ??
+        GladiatorDropEvent(
+          dropId: 'invalid',
+          type: GladiatorDropType.supplyCrate,
+          x: 0.0,
+          y: 0.0,
+          receivedAt: receivedAt ?? DateTime.now().toUtc(),
+        );
   }
 }
 
@@ -234,8 +249,13 @@ class GladiatorMatchListener {
   GladiatorSpawnRecord? handleGladiatorDropPayload(Map<String, dynamic> payload) {
     if (_disposed) return null;
 
+    final event = GladiatorDropEvent.tryParse(payload);
+    if (event == null) {
+      // Malformed drop payload without a valid Gladiator drop type; ignore safely without hazard creation
+      return null;
+    }
+
     final stopwatch = Stopwatch()..start();
-    final event = GladiatorDropEvent.fromPayload(payload);
 
     SpatialAnomaly? spawnedAnomaly;
     int? spawnedSquadIndex;
@@ -283,15 +303,7 @@ class GladiatorMatchListener {
             .clamp(0.0, warpController.powerConfig.maxShipEnergy);
         energyRestored = warpController.shipEnergy - beforeEnergy;
 
-        for (int i = 0; i < 2; i++) {
-          final idx = economy.spawnStrandedEnemyDrone(
-            event.x + (i * 8.0),
-            event.y,
-          );
-          if (idx >= 0) {
-            spawnedDrones++;
-          }
-        }
+        spawnedDrones = economy.replenishReserves(2);
         break;
     }
 

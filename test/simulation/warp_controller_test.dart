@@ -239,5 +239,29 @@ void main() {
         lessThan(subwarpWake.currentEnergy(6.0)),
       );
     });
+
+    test('Spoofed decoys expire and are pruned from spoofedWakes over time', () {
+      final economy = DroneSwarmEconomy(maxFleetSize: 10);
+      final roster = FighterRoster(maxFighterCount: 4);
+      final controller = ShipWarpController(
+        economy: economy,
+        fighterRoster: roster,
+      );
+
+      final spoof = controller.emitSpoofedWake(
+        x: 0,
+        y: 0,
+        fakeTargetX: 500,
+        fakeTargetY: 500,
+        initialConfidenceWeight: 0.50,
+        confidenceDecayRate: 0.50,
+      );
+      expect(spoof, isNotNull);
+      expect(controller.spoofedWakeCount, equals(1));
+
+      // Advance time by 15s -> confidence & energy drop well below 0.20 threshold
+      controller.update(15.0);
+      expect(controller.spoofedWakeCount, equals(0));
+    });
   });
 }

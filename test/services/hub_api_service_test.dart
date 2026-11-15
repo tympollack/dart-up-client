@@ -218,5 +218,33 @@ void main() {
       expect(service.activeCockpitCheers.length, equals(2));
       service.dispose();
     });
+
+    test('unlockedFeatIdsForMatch tracks feats strictly per matchId and channels have nonzero pollInterval', () async {
+      final service = HubApiService(
+        httpClient: MockClient((_) async => http.Response('{}', 200)),
+        maxRetries: 1,
+      );
+
+      await service.triggerMilestoneAchievement(
+        DartUpMilestoneFeat.smugglerRingCrack,
+        matchId: 'match_alpha',
+      );
+      await service.triggerMilestoneAchievement(
+        DartUpMilestoneFeat.threeWayAmbush,
+        matchId: 'match_beta',
+      );
+
+      expect(service.unlockedFeatIdsForMatch('match_alpha'), equals({'smuggler_ring_crack'}));
+      expect(service.unlockedFeatIdsForMatch('match_beta'), equals({'three_way_ambush'}));
+      expect(service.unlockedFeatIdsForMatch('match_gamma'), isEmpty);
+
+      final channel = service.subscribeToMatchChannel('match_gamma');
+      if (channel is SupabaseRealtimeMatchChannel) {
+        expect(channel.pollInterval, isNotNull);
+        expect(channel.pollInterval, greaterThan(Duration.zero));
+      }
+
+      service.dispose();
+    });
   });
 }

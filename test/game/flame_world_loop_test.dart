@@ -3,8 +3,11 @@ import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sd_client/celestial/celestial_node_manager.dart';
+import 'package:sd_client/combat/enemy_director.dart';
 import 'package:sd_client/combat/fighter_roster.dart';
 import 'package:sd_client/game/dart_up_game.dart';
+import 'package:sd_client/player/ship_warp_controller.dart';
+import 'package:sd_client/swarm/drone_swarm_economy.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -94,6 +97,52 @@ void main() {
       expect(roster.posY[idx], equals(100));
       expect(roster.targetX[idx], equals(200));
       expect(roster.targetY[idx], equals(100));
+    });
+
+    test('Decoy-targeted fighters pursue decoy target coordinates until proximity breach', () {
+      final economy = DroneSwarmEconomy(maxFleetSize: 20);
+      final roster = FighterRoster(maxFighterCount: 10);
+      final warpController = ShipWarpController(
+        economy: economy,
+        fighterRoster: roster,
+      );
+      final nodeManager = CelestialNodeManager();
+      final enemyRoster = FighterRoster(maxFighterCount: 12);
+      final director = EnemyDirector(
+        maxSquadCount: 4,
+        nodeManager: nodeManager,
+        enemyFighterRoster: enemyRoster,
+        playerShipController: warpController,
+        trackingTech: 1.0,
+      );
+      final squadIdx = director.spawnSquad(100.0, 100.0);
+
+      // Emit spoofed decoy wake pointing to (-800, 600)
+      warpController.emitSpoofedWake(
+        x: 100.0,
+        y: 100.0,
+        fakeTargetX: -800.0,
+        fakeTargetY: 600.0,
+        initialConfidenceWeight: 0.95,
+      );
+
+      // Perform sweep with player far away at (2000, 2000)
+      director.update(5.0, playerX: 2000.0, playerY: 2000.0);
+
+      expect(director.state[squadIdx], equals(EnemySquadState.engage));
+      expect(director.isSpoofedTarget[squadIdx], equals(1));
+      expect(director.targetX[squadIdx], equals(-800.0));
+      expect(director.targetY[squadIdx], equals(600.0));
+      expect(enemyRoster.activeCount, greaterThan(0));
+      // Fighter targets match decoy, NOT the real player at (2000, 2000)
+      expect(enemyRoster.targetX[0], equals(-800.0));
+      expect(enemyRoster.targetY[0], equals(600.0));
+
+      // Moving player close to squad triggers proximity breach
+      director.update(0.05, playerX: 110.0, playerY: 110.0);
+      expect(director.isSpoofedTarget[squadIdx], equals(0));
+      expect(director.targetX[squadIdx], equals(110.0));
+      expect(enemyRoster.targetX[0], equals(110.0));
     });
   });
 }

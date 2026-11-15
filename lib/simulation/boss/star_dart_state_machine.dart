@@ -127,11 +127,11 @@ class StarDartStateMachine {
   })  : config = config ?? const StarDartConfig(),
         _x = initialX,
         _y = initialY {
+    _shields = this.config.maxShields;
+    _hull = this.config.maxHull;
     if (math.sqrt(_x * _x + _y * _y) >= this.config.deepSectorBreachRadius) {
       triggerEarthCataclysmProtocol();
     }
-    _shields = this.config.maxShields;
-    _hull = this.config.maxHull;
   }
 
   final String bossId;
