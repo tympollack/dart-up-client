@@ -1,55 +1,78 @@
-import 'dart:convert';
 import 'package:flutter/foundation.dart';
-import 'package:http/http.dart' as http;
+import 'package:sd_client/services/hub_api_service.dart';
+
+export 'package:sd_client/services/hub_api_service.dart';
 
 class HubClient {
-  static const String baseUrl = 'https://hub.sunshade.health'; // Change if testing locally
-  static String? accessToken;
+  static const String baseUrl = HubApiService.defaultBaseUrl;
+  static HubApiService sharedService = HubApiService(baseUrl: baseUrl);
+  static int _matchSequence = 0;
 
-  /// Initializes the token from the URL query parameters (SSO from Hub)
-  static void initializeFromUrl(Uri uri) {
-    if (uri.queryParameters.containsKey('access_token')) {
-      accessToken = uri.queryParameters['access_token'];
+  /// Generates a unique per-match identifier so distinct matches never collide
+  /// on `Idempotency-Key` while retries for the same match remain idempotent.
+  static String generateMatchId([String prefix = 'match']) {
+    _matchSequence++;
+    final int timestampMicros = DateTime.now().toUtc().microsecondsSinceEpoch;
+    return '${prefix}_${timestampMicros}_$_matchSequence';
+  }
+
+  static String? get accessToken => sharedService.accessToken;
+  static set accessToken(String? token) {
+    if (token == null || token.isEmpty) {
+      sharedService.dispose();
+      sharedService = HubApiService(baseUrl: baseUrl);
+    } else {
+      if (sharedService.isDisposed) {
+        sharedService = HubApiService(baseUrl: baseUrl);
+      }
+      sharedService.authenticateWithSession(accessToken: token);
     }
   }
 
+  /// Initializes the token from the URL query parameters (SSO from Hub)
+  static void initializeFromUrl(Uri uri) {
+    if (sharedService.isDisposed) {
+      sharedService = HubApiService(baseUrl: baseUrl);
+    }
+    sharedService.authenticateFromUrl(uri);
+  }
+
   /// Sends the match result to the SunShade Hub UI ingest API
-  static Future<void> postMatchResult({
+  static Future<MatchSubmissionResult> postMatchResult({
     required String gameName,
     required String opponentName,
     required String result,
     required String matchType,
     required int moves,
+    String? matchId,
+    List<String> featsUnlocked = const [],
   }) async {
-    if (accessToken == null) {
+    final String resolvedMatchId =
+        (matchId != null && matchId.trim().isNotEmpty)
+            ? matchId.trim()
+            : generateMatchId();
+
+    if (!sharedService.isAuthenticated) {
       debugPrint('No access token available. Cannot post match result.');
-      return;
-    }
-
-    final url = Uri.parse('$baseUrl/api/matches/ingest');
-    try {
-      final response = await http.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer $accessToken',
-        },
-        body: jsonEncode({
-          'game_name': gameName,
-          'opponent_name': opponentName,
-          'result': result,
-          'match_type': matchType,
-          'moves': moves,
-        }),
+      return MatchSubmissionResult(
+        ok: false,
+        statusCode: 401,
+        attempts: 0,
+        idempotencyKey: 'dartup_match_${resolvedMatchId}_${result.toLowerCase()}',
+        error: 'No access token available.',
       );
-
-      if (response.statusCode == 200) {
-        debugPrint('Successfully synced match to Hub!');
-      } else {
-        debugPrint('Failed to sync match. Status: ${response.statusCode}, Body: ${response.body}');
-      }
-    } catch (e) {
-      debugPrint('Error posting match result: $e');
     }
+
+    return sharedService.submitMatchResult(
+      MatchSummary(
+        matchId: resolvedMatchId,
+        gameName: gameName,
+        opponentName: opponentName,
+        outcome: result,
+        matchType: matchType,
+        moves: moves,
+        featsUnlocked: featsUnlocked,
+      ),
+    );
   }
 }

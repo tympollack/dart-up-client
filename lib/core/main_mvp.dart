@@ -40,6 +40,11 @@ void main() {
 }
 
 class StarDartMVP extends FlameGame with TapCallbacks {
+  StarDartMVP({String? matchId, this.enableRealtimePolling = true})
+      : matchId = matchId ?? HubClient.generateMatchId();
+
+  final String matchId;
+  final bool enableRealtimePolling;
   late Ship playerShip;
   late SwarmManager droneSwarm; // NEW: The Swarm!
   late TacticalRTSComponent tacticalRTS; // NEW: Kenney RTS Tactical Subsystem!
@@ -52,6 +57,10 @@ class StarDartMVP extends FlameGame with TapCallbacks {
 
   @override
   Future<void> onLoad() async {
+    HubClient.sharedService.subscribeToMatchChannel(
+      matchId,
+      pollInterval: enableRealtimePolling ? null : Duration.zero,
+    );
     gameWorld = World();
     add(gameWorld);
 
@@ -111,12 +120,19 @@ class StarDartMVP extends FlameGame with TapCallbacks {
   void endMatch() {
     debugPrint("Ending match and syncing to Hub...");
     HubClient.postMatchResult(
+      matchId: matchId,
       gameName: 'Star Dart',
       opponentName: 'Swarm Director',
       result: 'victory', // Mocking a victory for now
       matchType: 'sandbox',
       moves: droneSwarm.unitCount, // Arbitrary "moves" score based on active drones
     );
+  }
+
+  @override
+  void onRemove() {
+    HubClient.sharedService.activeMatchChannel?.unsubscribe();
+    super.onRemove();
   }
 }
 

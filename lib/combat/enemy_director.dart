@@ -85,6 +85,7 @@ class EnemyDirector {
     targetX = Float32List(maxSquadCount);
     targetY = Float32List(maxSquadCount);
     state = Uint8List(maxSquadCount);
+    isSpoofedTarget = Uint8List(maxSquadCount);
   }
 
   final int maxSquadCount;
@@ -113,6 +114,8 @@ class EnemyDirector {
   late final Float32List targetY;
   /// EnemySquadState.*
   late final Uint8List state;
+  /// 1 if actively locked onto a spoofed decoy target; 0 if locked onto the real ship.
+  late final Uint8List isSpoofedTarget;
   int squadCount = 0;
 
   double _sweepCooldown = 0;
@@ -153,6 +156,7 @@ class EnemyDirector {
     posX[i] = x;
     posY[i] = y;
     state[i] = EnemySquadState.patrol;
+    isSpoofedTarget[i] = 0;
     squadCount++;
     _assignNewPatrolWaypoint(i);
     return i;
@@ -170,6 +174,7 @@ class EnemyDirector {
       targetX[index] = targetX[last];
       targetY[index] = targetY[last];
       state[index] = state[last];
+      isSpoofedTarget[index] = isSpoofedTarget[last];
     }
     squadCount--;
   }
@@ -187,9 +192,24 @@ class EnemyDirector {
     _checkProximityBreaches();
 
     if (enemyFighterRoster.activeCount > 0) {
-      // Every fighter in THIS roster exists to hunt the player -- no
-      // per-squad bookkeeping needed to know who should retarget.
-      enemyFighterRoster.retargetAllTo(_lastPlayerX, _lastPlayerY);
+      // If any engaged squad is actively pursuing the real player (non-spoofed or proximity breached),
+      // retarget fighters to the player. If ALL engaged squads are decoy-lured, fighters chase
+      // the decoy destination instead of the real ship!
+      double chaseX = _lastPlayerX;
+      double chaseY = _lastPlayerY;
+      for (int i = 0; i < squadCount; i++) {
+        if (state[i] == EnemySquadState.engage) {
+          if (isSpoofedTarget[i] == 0) {
+            chaseX = _lastPlayerX;
+            chaseY = _lastPlayerY;
+            break;
+          } else {
+            chaseX = targetX[i];
+            chaseY = targetY[i];
+          }
+        }
+      }
+      enemyFighterRoster.retargetAllTo(chaseX, chaseY);
     }
 
     _sweepCooldown -= dt;
@@ -248,13 +268,15 @@ class EnemyDirector {
   void _checkProximityBreaches() {
     final double radiusSq = config.engageProximityRadius * config.engageProximityRadius;
     for (int i = 0; i < squadCount; i++) {
-      if (state[i] == EnemySquadState.engage) continue;
       final double dx = _lastPlayerX - posX[i];
       final double dy = _lastPlayerY - posY[i];
       if (dx * dx + dy * dy <= radiusSq) {
-        targetX[i] = _lastPlayerX;
-        targetY[i] = _lastPlayerY;
-        _setState(i, EnemySquadState.engage);
+        if (state[i] != EnemySquadState.engage || isSpoofedTarget[i] == 1) {
+          isSpoofedTarget[i] = 0;
+          targetX[i] = _lastPlayerX;
+          targetY[i] = _lastPlayerY;
+          _setState(i, EnemySquadState.engage);
+        }
       }
     }
   }
@@ -273,8 +295,8 @@ class EnemyDirector {
       enemyFighterRoster.spawnFighter(
         posX[squadIndex],
         posY[squadIndex],
-        targetX: _lastPlayerX,
-        targetY: _lastPlayerY,
+        targetX: targetX[squadIndex],
+        targetY: targetY[squadIndex],
       );
     }
   }
@@ -289,11 +311,24 @@ class EnemyDirector {
   /// physically found the player, sensor uncertainty is no longer
   /// relevant to them.
   void _performSweep() {
-    final WarpWake? wake = playerShipController.lastWake;
+    final double now = playerShipController.simulationTime;
+    WarpWake? wake = playerShipController.lastWake;
+    double bestEnergy = wake != null
+        ? wake.currentEnergy(math.max(0.0, now - wake.timestamp))
+        : -1.0;
+
+    for (final SpoofedWarpWake spoof in playerShipController.spoofedWakes) {
+      final double spoofEnergy =
+          spoof.currentEnergy(math.max(0.0, now - spoof.timestamp));
+      if (spoofEnergy > bestEnergy) {
+        bestEnergy = spoofEnergy;
+        wake = spoof;
+      }
+    }
+
     if (wake == null) return; // the player has never jumped -- nothing to read
 
-    final double timeSinceJump =
-        playerShipController.simulationTime - wake.timestamp;
+    final double timeSinceJump = now - wake.timestamp;
     final SensorModule sensor =
         SensorModule(tier: sensorTechTier, trackingTech: trackingTech);
 
@@ -345,10 +380,17 @@ class EnemyDirector {
           break;
 
         case TrackingOutcome.pinpoint:
-          // Strong lock -- go straight for the player's live position,
-          // not the (by now possibly stale) departure point.
-          targetX[i] = _lastPlayerX;
-          targetY[i] = _lastPlayerY;
+          // If locked onto a spoofed decoy trail, lure squads toward the
+          // decoy's target coordinates rather than the real ship!
+          if (result.isSpoofedTrail) {
+            isSpoofedTarget[i] = 1;
+            targetX[i] = result.targetX ?? wake.x;
+            targetY[i] = result.targetY ?? wake.y;
+          } else {
+            isSpoofedTarget[i] = 0;
+            targetX[i] = _lastPlayerX;
+            targetY[i] = _lastPlayerY;
+          }
           _setState(i, EnemySquadState.engage);
           break;
       }
