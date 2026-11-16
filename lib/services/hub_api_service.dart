@@ -220,6 +220,7 @@ class SupabaseRealtimeMatchChannel implements RealtimeMatchChannel {
   final Duration? pollInterval;
 
   bool _subscribed = false;
+  bool _isPolling = false;
   Timer? _pollTimer;
   String? _lastCursor;
   final Map<String, List<void Function(Map<String, dynamic> payload)>>
@@ -247,6 +248,7 @@ class SupabaseRealtimeMatchChannel implements RealtimeMatchChannel {
   @override
   void unsubscribe() {
     _subscribed = false;
+    _isPolling = false;
     _pollTimer?.cancel();
     _pollTimer = null;
     _listeners.clear();
@@ -285,9 +287,10 @@ class SupabaseRealtimeMatchChannel implements RealtimeMatchChannel {
   /// Polls the Hub Realtime broadcast bridge once for any pending server events
   /// on [channelTopic] and dispatches them to registered broadcast listeners.
   Future<int> pollBroadcastsOnce() async {
-    if (!_subscribed || httpClient == null || endpointUrl == null) {
+    if (!_subscribed || _isPolling || httpClient == null || endpointUrl == null) {
       return 0;
     }
+    _isPolling = true;
 
     final Uri baseUri = Uri.parse(endpointUrl!);
     final Map<String, String> query = {
@@ -344,6 +347,8 @@ class SupabaseRealtimeMatchChannel implements RealtimeMatchChannel {
     } catch (e) {
       debugPrint('[SupabaseRealtimeMatchChannel] poll error: $e');
       return 0;
+    } finally {
+      _isPolling = false;
     }
   }
 }
@@ -361,7 +366,7 @@ class HubApiService {
     http.Client? httpClient,
     this.maxRetries = 3,
     this.retryDelay = const Duration(milliseconds: 20),
-    this.realtimePollInterval,
+    this.realtimePollInterval = const Duration(seconds: 2),
   })  : _ownsHttpClient = httpClient == null,
         _httpClient = httpClient ?? http.Client();
 
@@ -379,8 +384,10 @@ class HubApiService {
   bool _disposed = false;
 
   final Set<String> _unlockedFeatIds = {};
+  final Map<String, Set<String>> _matchUnlockedFeats = {};
   final Set<String> _syncedFeatIds = {};
-  final Set<String> _inFlightFeatIds = {};
+  final Map<String, Future<AchievementToastNotification?>> _inFlightFeatFutures =
+      {};
   final List<AchievementToastNotification> _toastHistory = [];
   final List<SpectatorCheerEvent> _activeCockpitCheers = [];
 
@@ -403,6 +410,10 @@ class HubApiService {
   List<AchievementToastNotification> get toastHistory =>
       List.unmodifiable(_toastHistory);
   Set<String> get unlockedFeatIds => Set.unmodifiable(_unlockedFeatIds);
+
+  /// Returns the set of feat IDs unlocked specifically during [matchId].
+  Set<String> unlockedFeatIdsForMatch(String matchId) =>
+      Set.unmodifiable(_matchUnlockedFeats[matchId] ?? {});
   Set<String> get syncedFeatIds => Set.unmodifiable(_syncedFeatIds);
 
   Stream<SpectatorCheerEvent> get spectatorCheers =>
@@ -589,15 +600,44 @@ class HubApiService {
     DartUpMilestoneFeat feat, {
     String matchId = 'active_match',
   }) async {
-    if (_disposed ||
-        _syncedFeatIds.contains(feat.id) ||
-        _inFlightFeatIds.contains(feat.id)) {
+    if (_disposed || _syncedFeatIds.contains(feat.id)) {
+      return null;
+    }
+
+    final existingFuture = _inFlightFeatFutures[feat.id];
+    if (existingFuture != null) {
+      final existingResult = await existingFuture;
+      if (_syncedFeatIds.contains(feat.id) ||
+          existingResult?.syncedWithHub == true) {
+        return existingResult;
+      }
+      if (_disposed || _syncedFeatIds.contains(feat.id)) {
+        return null;
+      }
+    }
+
+    final future = _executeTriggerMilestoneAchievement(feat, matchId: matchId);
+    _inFlightFeatFutures[feat.id] = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_inFlightFeatFutures[feat.id], future)) {
+        _inFlightFeatFutures.remove(feat.id);
+      }
+    }
+  }
+
+  Future<AchievementToastNotification?> _executeTriggerMilestoneAchievement(
+    DartUpMilestoneFeat feat, {
+    required String matchId,
+  }) async {
+    if (_disposed || _syncedFeatIds.contains(feat.id)) {
       return null;
     }
 
     final bool wasAlreadyUnlockedLocally = _unlockedFeatIds.contains(feat.id);
     _unlockedFeatIds.add(feat.id);
-    _inFlightFeatIds.add(feat.id);
+    _matchUnlockedFeats.putIfAbsent(matchId, () => {}).add(feat.id);
 
     bool synced = false;
     try {
@@ -653,9 +693,7 @@ class HubApiService {
           }
         }
       }
-    } finally {
-      _inFlightFeatIds.remove(feat.id);
-    }
+    } finally {}
 
     if (wasAlreadyUnlockedLocally && !synced) {
       return null;
@@ -731,6 +769,7 @@ class HubApiService {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _inFlightFeatFutures.clear();
     _activeMatchChannel?.unsubscribe();
     _activeMatchChannel = null;
     _achievementToastController.close();

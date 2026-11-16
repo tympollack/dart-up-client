@@ -219,5 +219,47 @@ void main() {
       wakeRenderer.onRemove();
       expect(wakeRenderer.activeWakeCount, equals(0));
     });
+
+    test('WarpWakeRenderComponent captures multiple ECM spoofed wakes emitted back-to-back between render updates', () {
+      final economy = DroneSwarmEconomy(maxFleetSize: 20);
+      final roster = FighterRoster(maxFighterCount: 10);
+      final warpController = ShipWarpController(
+        economy: economy,
+        fighterRoster: roster,
+      );
+
+      final wakeRenderer = WarpWakeRenderComponent(
+        warpController: warpController,
+      );
+
+      // Emit two decoys in rapid succession without updating the renderer in-between
+      final decoy1 = warpController.emitSpoofedWake(
+        x: 10,
+        y: 20,
+        fakeTargetX: 100,
+        fakeTargetY: 200,
+      );
+      final decoy2 = warpController.emitSpoofedWake(
+        x: 30,
+        y: 40,
+        fakeTargetX: -100,
+        fakeTargetY: -200,
+      );
+
+      expect(decoy1, isNotNull);
+      expect(decoy2, isNotNull);
+      expect(decoy2!.sequenceId, greaterThan(decoy1!.sequenceId));
+
+      // Single renderer update should ingest BOTH decoys into the pooled VFX buffer
+      wakeRenderer.update(0.016);
+      expect(wakeRenderer.activeWakeCount, equals(2));
+
+      // Subsequent update with no new decoys does not duplicate
+      wakeRenderer.update(0.016);
+      expect(wakeRenderer.activeWakeCount, equals(2));
+
+      wakeRenderer.onRemove();
+      expect(wakeRenderer.activeWakeCount, equals(0));
+    });
   });
 }

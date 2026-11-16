@@ -148,6 +148,7 @@ class DockedRefitSlot {
 class DroneSwarmEconomy {
   DroneSwarmEconomy({
     required this.maxFleetSize,
+    int? startingFleetSize,
     DeploymentConfig? config,
     int initialHealth = 100,
     this.onExtractionEvent,
@@ -172,7 +173,7 @@ class DroneSwarmEconomy {
     rechargingNeedsRefit = Uint8List(maxFleetSize);
     rechargingDroneIds = Int32List(maxFleetSize);
 
-    availableCount = maxFleetSize;
+    availableCount = (startingFleetSize ?? maxFleetSize).clamp(0, maxFleetSize);
   }
 
   final int maxFleetSize;
@@ -382,6 +383,16 @@ class DroneSwarmEconomy {
     extractionStateIndex[i] = DroneExtractionState.idle.index;
     deployedCount++;
     return i;
+  }
+
+  /// Adds reserve drones directly to [availableCount] up to [maxFleetSize],
+  /// e.g. from friendly audience supply crate drops. Returns the number of drones added.
+  int replenishReserves(int count) {
+    if (count <= 0) return 0;
+    final int room = math.max(0, maxFleetSize - totalLivingFleet);
+    final int toAdd = math.min(count, room);
+    availableCount += toAdd;
+    return toAdd;
   }
 
   // ---------------------------------------------------------------------------

@@ -48,12 +48,40 @@ class PlayerShipComponent extends PositionComponent {
 
   final Paint _hullPaint = Paint()..color = const Color(0xFF6FD8FF);
 
+  String? _equippedHullSkinId;
+  String? _equippedHullSkinUrl;
+  String? _equippedTrailSkinId;
+  String? _equippedTrailSkinUrl;
+
   /// Current cosmetic hull tint color.
   Color get hullColor => _hullPaint.color;
+  String? get equippedHullSkinId => _equippedHullSkinId;
+  String? get equippedHullSkinUrl => _equippedHullSkinUrl;
+  String? get equippedTrailSkinId => _equippedTrailSkinId;
+  String? get equippedTrailSkinUrl => _equippedTrailSkinUrl;
 
   /// Applies the cosmetic hull tint loaded from `@sunshade/assets` cabinet profile.
   void applyHullTint(int argbHex) {
     _hullPaint.color = Color(argbHex);
+  }
+
+  /// Configures equipped cosmetic skin manifests from `@sunshade/assets` CDN URLs.
+  ///
+  /// Immediately styles the hull with [primaryTintHex] and applies cosmetic accent
+  /// trim if a custom hull skin is equipped. CDN URLs and skin IDs are retained for
+  /// sprite sheet hydration once asset pack loaders are configured.
+  void applyCosmeticManifest({
+    required int primaryTintHex,
+    String? hullSkinId,
+    String? hullSkinUrl,
+    String? trailSkinId,
+    String? trailSkinUrl,
+  }) {
+    applyHullTint(primaryTintHex);
+    _equippedHullSkinId = hullSkinId;
+    _equippedHullSkinUrl = hullSkinUrl;
+    _equippedTrailSkinId = trailSkinId;
+    _equippedTrailSkinUrl = trailSkinUrl;
   }
 
   /// The ship's true gameplay position, unaffected by the cosmetic shake.
@@ -134,6 +162,16 @@ class PlayerShipComponent extends PositionComponent {
     // itself is drawn.
     final Rect bounds = Rect.fromLTWH(0, 0, size.x, size.y);
     canvas.drawRect(bounds, _hullPaint);
+
+    if (_equippedHullSkinId != null) {
+      // Cosmetic accent trim indicating an equipped custom hull skin manifest
+      final Paint accentPaint = Paint()
+        ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5;
+      final Rect insetBounds = bounds.deflate(2.0);
+      canvas.drawRect(insetBounds, accentPaint);
+    }
 
     if (_flashing) {
       final double t = (_flashElapsed / flashDuration).clamp(0.0, 1.0);

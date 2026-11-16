@@ -106,6 +106,9 @@ class WarpWake {
 
 /// False-trail wake emitted when a fleeing ship expends active ECM charge.
 class SpoofedWarpWake extends WarpWake {
+  /// Monotonically increasing sequence identifier assigned at generation time.
+  final int sequenceId;
+
   /// Initial confidence weight (`0.0 .. 1.0`) representing how convincing
   /// the false trail appears to enemy sensors at creation.
   final double initialConfidenceWeight;
@@ -118,6 +121,7 @@ class SpoofedWarpWake extends WarpWake {
     required super.y,
     required super.timestamp,
     required super.shipEcm,
+    this.sequenceId = 0,
     super.driveType = WarpDriveType.subwarp,
     super.baseEnergySignature = 0.80,
     super.decayRate = 0.12,

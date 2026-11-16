@@ -242,6 +242,8 @@ class ShipWarpController {
   final List<SpatialAnomaly> _anomalies = [];
   final Set<String> _hitAnomalyIdsInCurrentTransit = {};
   final List<SpoofedWarpWake> _spoofedWakes = [];
+  SpoofedWarpWake? _lastSpoofedWake;
+  int _spoofedSequenceCounter = 0;
 
   CelestialNode? _targetNode;
   WarpDriveType _driveType = WarpDriveType.ftl;
@@ -321,6 +323,7 @@ class ShipWarpController {
 
   List<SpatialAnomaly> get anomalies => List.unmodifiable(_anomalies);
   List<SpoofedWarpWake> get spoofedWakes => List.unmodifiable(_spoofedWakes);
+  SpoofedWarpWake? get lastSpoofedWake => _lastSpoofedWake;
   int get spoofedWakeCount => _spoofedWakes.length;
   SpoofedWarpWake spoofedWakeAt(int index) => _spoofedWakes[index];
 
@@ -380,6 +383,7 @@ class ShipWarpController {
     final vy = dist > 0 ? dy / dist : 0.0;
 
     final spoof = SpoofedWarpWake(
+      sequenceId: ++_spoofedSequenceCounter,
       x: x,
       y: y,
       timestamp: _simulationTime,
@@ -395,6 +399,7 @@ class ShipWarpController {
       initialConfidenceWeight: initialConfidenceWeight,
       confidenceDecayRate: confidenceDecayRate,
     );
+    _lastSpoofedWake = spoof;
     _spoofedWakes.add(spoof);
     return spoof;
   }
@@ -530,6 +535,16 @@ class ShipWarpController {
         .clamp(0.0, powerConfig.maxShipEnergy);
     ecmCharge = (ecmCharge + powerConfig.ecmRegenPerSecond * dt)
         .clamp(0.0, powerConfig.maxEcmCharge);
+
+    // Prune expired spoofed wakes whose confidence or energy has dropped below lost-trace threshold (0.20)
+    // or when age exceeds max decoy lifetime (60s), keeping memory and sweeps bounded.
+    if (_spoofedWakes.isNotEmpty) {
+      _spoofedWakes.removeWhere((wake) {
+        final double age = math.max(0.0, _simulationTime - wake.timestamp);
+        return age > 60.0 ||
+            (wake.confidenceAt(age) < 0.20 && wake.currentEnergy(age) < 0.20);
+      });
+    }
 
     if (_state == WarpState.spooling) {
       _spoolRemaining -= dt * effectiveSpoolRateMultiplier;

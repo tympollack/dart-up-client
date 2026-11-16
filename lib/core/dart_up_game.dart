@@ -88,6 +88,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
   late final GladiatorMatchListener gladiatorListener;
   int _totalDronesHacked = 0;
   int _engagedSquadCount = 0;
+  final Set<String> _matchUnlockedFeatIds = {};
 
   // ---- Components ----
   late final PlayerShipComponent shipComponent;
@@ -113,7 +114,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
       hubApiService.authenticateFromUrl(Uri.base);
     }
 
-    economy = DroneSwarmEconomy(maxFleetSize: 300);
+    economy = DroneSwarmEconomy(maxFleetSize: 350, startingFleetSize: 300);
     fighterRoster = FighterRoster(maxFighterCount: 24);
     enemyFighterRoster = FighterRoster(maxFighterCount: 60);
     boidsFlockingSolver = BoidsFlockingSolver(
@@ -152,6 +153,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
       onHackSuccess: (result) {
         _totalDronesHacked += result.dronesHacked;
         if (_totalDronesHacked >= 3) {
+          _matchUnlockedFeatIds.add(DartUpMilestoneFeat.smugglerRingCrack.id);
           unawaited(
             hubApiService.triggerMilestoneAchievement(
               DartUpMilestoneFeat.smugglerRingCrack,
@@ -198,6 +200,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
       onSquadEngaged: (squadIndex) {
         _engagedSquadCount++;
         if (_engagedSquadCount >= 2) {
+          _matchUnlockedFeatIds.add(DartUpMilestoneFeat.threeWayAmbush.id);
           unawaited(
             hubApiService.triggerMilestoneAchievement(
               DartUpMilestoneFeat.threeWayAmbush,
@@ -227,7 +230,13 @@ class DartUpGame extends FlameGame with TapCallbacks {
     gladiatorListener.attachToChannel(matchChannel);
     unawaited(
       gladiatorListener.loadEquippedCosmetics().then((manifest) {
-        shipComponent.applyHullTint(manifest.primaryTintHex);
+        shipComponent.applyCosmeticManifest(
+          primaryTintHex: manifest.primaryTintHex,
+          hullSkinId: manifest.hullSkinId,
+          hullSkinUrl: manifest.hullSpriteCdnUrl,
+          trailSkinId: manifest.swarmTrailId,
+          trailSkinUrl: manifest.swarmTrailSpriteCdnUrl,
+        );
       }),
     );
 
@@ -306,9 +315,12 @@ class DartUpGame extends FlameGame with TapCallbacks {
     int durationSeconds = 0,
   }) async {
     if (outcome.toLowerCase() == 'victory') {
-      await hubApiService.triggerMilestoneAchievement(
-        DartUpMilestoneFeat.starDartSiegeSurvivor,
-        matchId: matchId,
+      _matchUnlockedFeatIds.add(DartUpMilestoneFeat.starDartSiegeSurvivor.id);
+      unawaited(
+        hubApiService.triggerMilestoneAchievement(
+          DartUpMilestoneFeat.starDartSiegeSurvivor,
+          matchId: matchId,
+        ),
       );
     }
 
@@ -321,7 +333,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
         durationSeconds: durationSeconds,
         dronesDeployed: economy.deployedCount,
         dronesHacked: _totalDronesHacked,
-        featsUnlocked: hubApiService.unlockedFeatIds.toList(),
+        featsUnlocked: _matchUnlockedFeatIds.toList(),
       ),
     );
   }
@@ -378,6 +390,8 @@ class DartUpGame extends FlameGame with TapCallbacks {
     final double playerY = shipComponent.basePosition.y;
 
     economy.update(dt, shipX: playerX, shipY: playerY);
+    boidsFlockingSolver.update(dt);
+    playerInteractionModel.update(dt, shipX: playerX, shipY: playerY);
     hackingController.update(dt);
 
     // Order matters here: EnemyDirector may spawn fresh enemy fighters
@@ -396,6 +410,9 @@ class DartUpGame extends FlameGame with TapCallbacks {
     if (_injectedGladiatorListener == null) {
       gladiatorListener.dispose();
     }
+    // Unsubscribe from active match channels without disposing process-wide
+    // HubClient.sharedService singleton
+    hubApiService.activeMatchChannel?.unsubscribe();
     _swarmCommandPort?.send(kShutdownCommand);
     _swarmReceivePort?.close();
     _swarmIsolate?.kill(priority: Isolate.immediate);

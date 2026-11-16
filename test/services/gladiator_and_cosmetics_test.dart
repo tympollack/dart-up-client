@@ -96,6 +96,7 @@ void main() {
       expect(supplyRecord.injectionLatency.inMilliseconds, lessThan(250));
       expect(supplyRecord.energyRestored, closeTo(35.0, 1e-4));
       expect(warpController.shipEnergy, closeTo(75.0, 1e-4));
+      expect(economy.availableCount, equals(12)); // Started at 10, replenished +2 reserves
 
       listener.dispose();
       hubService.dispose();
@@ -181,6 +182,85 @@ void main() {
 
       expect(listener.spawnRecords, isEmpty);
       expect(warpController.anomalies, isEmpty);
+      hubService.dispose();
+    });
+
+    test('Malformed drop payloads without recognized drop type are safely ignored without hazard creation', () {
+      final hubService = HubApiService();
+      final economy = DroneSwarmEconomy(maxFleetSize: 20);
+      final warpController = ShipWarpController(
+        economy: economy,
+        fighterRoster: FighterRoster(maxFighterCount: 4),
+      );
+
+      final listener = GladiatorMatchListener(
+        hubApiService: hubService,
+        economy: economy,
+        warpController: warpController,
+      );
+
+      final channel = hubService.subscribeToMatchChannel('malformed_test_match');
+      listener.attachToChannel(channel);
+
+      channel.emitSimulatedBroadcast('gladiator_drop', {
+        'drop_id': 'corrupted_01',
+        'type': 'unrecognized_random_command',
+        'x': 50.0,
+        'y': 50.0,
+      });
+
+      expect(listener.spawnRecords, isEmpty);
+      expect(warpController.anomalies, isEmpty);
+
+      listener.dispose();
+      hubService.dispose();
+    });
+
+    test('GladiatorMatchListener deduplicates identical dropId payloads from repeated or overlapping polls', () {
+      final hubService = HubApiService();
+      final economy = DroneSwarmEconomy(maxFleetSize: 20);
+      economy.availableCount = 10;
+      final warpController = ShipWarpController(
+        economy: economy,
+        fighterRoster: FighterRoster(maxFighterCount: 4),
+      );
+      warpController.shipEnergy = 30.0;
+
+      final listener = GladiatorMatchListener(
+        hubApiService: hubService,
+        economy: economy,
+        warpController: warpController,
+      );
+
+      final channel = hubService.subscribeToMatchChannel('dedup_test_match');
+      listener.attachToChannel(channel);
+
+      // First delivery of supply_01
+      channel.emitSimulatedBroadcast('gladiator_drop', {
+        'drop_id': 'supply_01',
+        'drop_type': 'supply_crate',
+        'x': 0.0,
+        'y': 0.0,
+      });
+
+      expect(listener.spawnRecords.length, equals(1));
+      expect(warpController.shipEnergy, closeTo(65.0, 1e-4));
+      expect(economy.availableCount, equals(12));
+
+      // Overlapping second delivery with same drop_id
+      channel.emitSimulatedBroadcast('gladiator_drop', {
+        'drop_id': 'supply_01',
+        'drop_type': 'supply_crate',
+        'x': 0.0,
+        'y': 0.0,
+      });
+
+      // Must be safely ignored without duplicate energy restoration or drone replenishment
+      expect(listener.spawnRecords.length, equals(1));
+      expect(warpController.shipEnergy, closeTo(65.0, 1e-4));
+      expect(economy.availableCount, equals(12));
+
+      listener.dispose();
       hubService.dispose();
     });
   });
