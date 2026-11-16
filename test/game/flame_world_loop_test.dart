@@ -6,6 +6,7 @@ import 'package:sd_client/celestial/celestial_node_manager.dart';
 import 'package:sd_client/combat/enemy_director.dart';
 import 'package:sd_client/combat/fighter_roster.dart';
 import 'package:sd_client/game/dart_up_game.dart';
+import 'package:sd_client/hub/hub_client.dart';
 import 'package:sd_client/player/ship_warp_controller.dart';
 import 'package:sd_client/swarm/drone_swarm_economy.dart';
 
@@ -143,6 +144,33 @@ void main() {
       expect(director.isSpoofedTarget[squadIdx], equals(0));
       expect(director.targetX[squadIdx], equals(110.0));
       expect(enemyRoster.targetX[0], equals(110.0));
+    });
+
+    test('DartUpGame.onRemove preserves HubClient.sharedService across game instances', () async {
+      final game1 = DartUpGame(spawnIsolateOnLoad: false);
+      game1.onGameResize(Vector2(1280, 720));
+      await game1.onLoad();
+      game1.onMount();
+
+      expect(HubClient.sharedService.isDisposed, isFalse);
+      expect(game1.hubApiService.isDisposed, isFalse);
+
+      game1.onRemove();
+
+      // Shared service must remain alive and usable
+      expect(HubClient.sharedService.isDisposed, isFalse);
+
+      // Create a second game instance relying on the default shared service
+      final game2 = DartUpGame(spawnIsolateOnLoad: false);
+      game2.onGameResize(Vector2(1280, 720));
+      await game2.onLoad();
+      game2.onMount();
+
+      expect(game2.hubApiService.isDisposed, isFalse);
+      expect(identical(game2.hubApiService, HubClient.sharedService), isTrue);
+
+      game2.onRemove();
+      expect(HubClient.sharedService.isDisposed, isFalse);
     });
   });
 }

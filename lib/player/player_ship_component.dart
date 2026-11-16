@@ -66,6 +66,10 @@ class PlayerShipComponent extends PositionComponent {
   }
 
   /// Configures equipped cosmetic skin manifests from `@sunshade/assets` CDN URLs.
+  ///
+  /// Immediately styles the hull with [primaryTintHex] and applies cosmetic accent
+  /// trim if a custom hull skin is equipped. CDN URLs and skin IDs are retained for
+  /// sprite sheet hydration once asset pack loaders are configured.
   void applyCosmeticManifest({
     required int primaryTintHex,
     String? hullSkinId,
@@ -158,6 +162,16 @@ class PlayerShipComponent extends PositionComponent {
     // itself is drawn.
     final Rect bounds = Rect.fromLTWH(0, 0, size.x, size.y);
     canvas.drawRect(bounds, _hullPaint);
+
+    if (_equippedHullSkinId != null) {
+      // Cosmetic accent trim indicating an equipped custom hull skin manifest
+      final Paint accentPaint = Paint()
+        ..color = const Color(0xFFFFFFFF).withValues(alpha: 0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.5;
+      final Rect insetBounds = bounds.deflate(2.0);
+      canvas.drawRect(insetBounds, accentPaint);
+    }
 
     if (_flashing) {
       final double t = (_flashElapsed / flashDuration).clamp(0.0, 1.0);

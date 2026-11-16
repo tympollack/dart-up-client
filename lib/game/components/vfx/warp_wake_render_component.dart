@@ -57,7 +57,7 @@ class WarpWakeRenderComponent extends PositionComponent {
   int _activeWakeCount = 0;
 
   WarpWake? _lastObservedControllerWake;
-  SpoofedWarpWake? _lastObservedSpoofedWake;
+  int _lastObservedSpoofedSequenceId = 0;
 
   static const Color subwarpTrailColor = Color(0xFF00E5FF);
   static const Color ftlTearColor = Color(0xFFD500F9);
@@ -135,11 +135,25 @@ class WarpWakeRenderComponent extends PositionComponent {
       recordWake(latest);
     }
 
-    // Observe newly emitted ECM spoofed wakes without relying on fragile list indexing
+    // Observe newly emitted ECM spoofed wakes without losing decoys emitted in bursts
     final SpoofedWarpWake? latestSpoof = warpController.lastSpoofedWake;
-    if (latestSpoof != null && !identical(latestSpoof, _lastObservedSpoofedWake)) {
-      _lastObservedSpoofedWake = latestSpoof;
-      recordWake(latestSpoof);
+    if (latestSpoof != null) {
+      if (latestSpoof.sequenceId < _lastObservedSpoofedSequenceId) {
+        // Controller sequence was reset
+        _lastObservedSpoofedSequenceId = 0;
+      }
+      if (latestSpoof.sequenceId > _lastObservedSpoofedSequenceId) {
+        final int count = warpController.spoofedWakeCount;
+        for (int i = 0; i < count; i++) {
+          final wake = warpController.spoofedWakeAt(i);
+          if (wake.sequenceId > _lastObservedSpoofedSequenceId) {
+            recordWake(wake);
+          }
+        }
+        _lastObservedSpoofedSequenceId = latestSpoof.sequenceId;
+      }
+    } else {
+      _lastObservedSpoofedSequenceId = 0;
     }
 
     // Prune wakes whose energy has decayed below visibility threshold (0.02)
@@ -266,7 +280,7 @@ class WarpWakeRenderComponent extends PositionComponent {
   void onRemove() {
     _activeWakeCount = 0;
     _lastObservedControllerWake = null;
-    _lastObservedSpoofedWake = null;
+    _lastObservedSpoofedSequenceId = 0;
     super.onRemove();
   }
 }

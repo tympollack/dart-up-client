@@ -215,5 +215,53 @@ void main() {
       listener.dispose();
       hubService.dispose();
     });
+
+    test('GladiatorMatchListener deduplicates identical dropId payloads from repeated or overlapping polls', () {
+      final hubService = HubApiService();
+      final economy = DroneSwarmEconomy(maxFleetSize: 20);
+      economy.availableCount = 10;
+      final warpController = ShipWarpController(
+        economy: economy,
+        fighterRoster: FighterRoster(maxFighterCount: 4),
+      );
+      warpController.shipEnergy = 30.0;
+
+      final listener = GladiatorMatchListener(
+        hubApiService: hubService,
+        economy: economy,
+        warpController: warpController,
+      );
+
+      final channel = hubService.subscribeToMatchChannel('dedup_test_match');
+      listener.attachToChannel(channel);
+
+      // First delivery of supply_01
+      channel.emitSimulatedBroadcast('gladiator_drop', {
+        'drop_id': 'supply_01',
+        'drop_type': 'supply_crate',
+        'x': 0.0,
+        'y': 0.0,
+      });
+
+      expect(listener.spawnRecords.length, equals(1));
+      expect(warpController.shipEnergy, closeTo(65.0, 1e-4));
+      expect(economy.availableCount, equals(12));
+
+      // Overlapping second delivery with same drop_id
+      channel.emitSimulatedBroadcast('gladiator_drop', {
+        'drop_id': 'supply_01',
+        'drop_type': 'supply_crate',
+        'x': 0.0,
+        'y': 0.0,
+      });
+
+      // Must be safely ignored without duplicate energy restoration or drone replenishment
+      expect(listener.spawnRecords.length, equals(1));
+      expect(warpController.shipEnergy, closeTo(65.0, 1e-4));
+      expect(economy.availableCount, equals(12));
+
+      listener.dispose();
+      hubService.dispose();
+    });
   });
 }

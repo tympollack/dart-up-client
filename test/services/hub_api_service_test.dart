@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -243,6 +244,105 @@ void main() {
         expect(channel.pollInterval, isNotNull);
         expect(channel.pollInterval, greaterThan(Duration.zero));
       }
+
+      service.dispose();
+    });
+
+    test('SupabaseRealtimeMatchChannel serializes overlapping polls so only one request is in flight', () async {
+      final Completer<http.Response> inFlightCompleter = Completer<http.Response>();
+      int pollCount = 0;
+
+      final mockClient = MockClient((http.Request request) async {
+        if (request.url.path == '/api/realtime/broadcasts') {
+          pollCount++;
+          return inFlightCompleter.future;
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final channel = SupabaseRealtimeMatchChannel(
+        channelTopic: 'realtime:test:channel',
+        httpClient: mockClient,
+        endpointUrl: 'https://hub-stag.sunshade.icu/api/realtime/broadcasts',
+        pollInterval: const Duration(seconds: 2),
+      );
+      channel.subscribe();
+
+      // Trigger first poll (which awaits inFlightCompleter)
+      final Future<int> poll1 = channel.pollBroadcastsOnce();
+      // Trigger overlapping second poll while poll 1 is still in flight
+      final int poll2 = await channel.pollBroadcastsOnce();
+
+      // Yield event loop so poll 1 reaches mockClient handler
+      await Future<void>.delayed(Duration.zero);
+
+      // Second poll must return 0 immediately without issuing another HTTP GET
+      expect(poll2, equals(0));
+      expect(pollCount, equals(1));
+
+      // Complete first poll
+      inFlightCompleter.complete(
+        http.Response(jsonEncode({'events': []}), 200),
+      );
+      final int poll1Result = await poll1;
+      expect(poll1Result, equals(0));
+
+      channel.unsubscribe();
+    });
+
+    test('triggerMilestoneAchievement coordinates concurrent in-flight attempts and retries if first fails', () async {
+      int unlockAttempts = 0;
+      final Completer<http.Response> firstUnlockCompleter = Completer<http.Response>();
+
+      final mockClient = MockClient((http.Request request) async {
+        if (request.url.path == '/api/achievements/unlock') {
+          unlockAttempts++;
+          if (unlockAttempts == 1) {
+            return firstUnlockCompleter.future;
+          }
+          return http.Response(jsonEncode({'unlocked': true}), 200);
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final service = HubApiService(
+        httpClient: mockClient,
+        maxRetries: 1,
+        retryDelay: Duration.zero,
+      );
+      service.authenticateWithSession(accessToken: 'jwt_concurrency_test');
+
+      // First call starts and is in-flight
+      final Future<AchievementToastNotification?> firstCall =
+          service.triggerMilestoneAchievement(
+        DartUpMilestoneFeat.starDartSiegeSurvivor,
+        matchId: 'm_concurrent',
+      );
+
+      // Second call starts concurrently for the same feat
+      final Future<AchievementToastNotification?> secondCall =
+          service.triggerMilestoneAchievement(
+        DartUpMilestoneFeat.starDartSiegeSurvivor,
+        matchId: 'm_concurrent',
+      );
+
+      // Complete first attempt with a 503 error
+      firstUnlockCompleter.complete(
+        http.Response(jsonEncode({'error': 'Server unavailable'}), 503),
+      );
+
+      final firstResult = await firstCall;
+      final secondResult = await secondCall;
+
+      // First result failed to sync with hub
+      expect(firstResult, isNotNull);
+      expect(firstResult!.syncedWithHub, isFalse);
+
+      // Second result coordinated and ran the retry which succeeded with HTTP 200
+      expect(secondResult, isNotNull);
+      expect(secondResult!.syncedWithHub, isTrue);
+      expect(service.syncedFeatIds.contains('star_dart_siege_survivor'), isTrue);
+      expect(unlockAttempts, equals(2));
 
       service.dispose();
     });

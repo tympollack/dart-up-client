@@ -410,9 +410,9 @@ class DartUpGame extends FlameGame with TapCallbacks {
     if (_injectedGladiatorListener == null) {
       gladiatorListener.dispose();
     }
-    if (_injectedHubApiService == null) {
-      hubApiService.dispose();
-    }
+    // Unsubscribe from active match channels without disposing process-wide
+    // HubClient.sharedService singleton
+    hubApiService.activeMatchChannel?.unsubscribe();
     _swarmCommandPort?.send(kShutdownCommand);
     _swarmReceivePort?.close();
     _swarmIsolate?.kill(priority: Isolate.immediate);

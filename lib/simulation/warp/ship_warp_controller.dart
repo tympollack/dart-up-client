@@ -243,6 +243,7 @@ class ShipWarpController {
   final Set<String> _hitAnomalyIdsInCurrentTransit = {};
   final List<SpoofedWarpWake> _spoofedWakes = [];
   SpoofedWarpWake? _lastSpoofedWake;
+  int _spoofedSequenceCounter = 0;
 
   CelestialNode? _targetNode;
   WarpDriveType _driveType = WarpDriveType.ftl;
@@ -382,6 +383,7 @@ class ShipWarpController {
     final vy = dist > 0 ? dy / dist : 0.0;
 
     final spoof = SpoofedWarpWake(
+      sequenceId: ++_spoofedSequenceCounter,
       x: x,
       y: y,
       timestamp: _simulationTime,

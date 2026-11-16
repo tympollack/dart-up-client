@@ -217,6 +217,7 @@ class GladiatorMatchListener {
   final String cdnBaseUrl;
 
   final List<GladiatorSpawnRecord> _spawnRecords = [];
+  final Set<String> _processedDropIds = {};
   final StreamController<GladiatorSpawnRecord> _dropStreamController =
       StreamController<GladiatorSpawnRecord>.broadcast();
 
@@ -253,6 +254,15 @@ class GladiatorMatchListener {
     if (event == null) {
       // Malformed drop payload without a valid Gladiator drop type; ignore safely without hazard creation
       return null;
+    }
+
+    if (_processedDropIds.contains(event.dropId)) {
+      // Duplicate drop event (e.g. from network retry or overlapping polling ticks); ignore
+      return null;
+    }
+    _processedDropIds.add(event.dropId);
+    if (_processedDropIds.length > 500) {
+      _processedDropIds.remove(_processedDropIds.first);
     }
 
     final stopwatch = Stopwatch()..start();
@@ -373,6 +383,8 @@ class GladiatorMatchListener {
     _attachedChannel?.offBroadcast('gladiator_drop', _onChannelDropBroadcast);
     _attachedChannel = null;
     _dropStreamController.close();
+    _spawnRecords.clear();
+    _processedDropIds.clear();
     if (_ownsHttpClient) {
       _httpClient.close();
     }
