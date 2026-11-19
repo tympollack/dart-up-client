@@ -314,11 +314,16 @@ class SsoAuthService {
               currentSession.refreshToken!.isNotEmpty;
 
           final cookieUserId = session.userId;
+          // Identity must be proven to belong to the same session or same user.
+          // Never assume an unknown/opaque token without user ID belongs to the previous account!
+          final bool isSameSessionToken = hasValidManagedSession &&
+              session.accessToken == currentSession.accessToken;
           final bool isSameUser = hasValidManagedSession &&
-              (cookieUserId == null || cookieUserId == currentSession.user.id);
+              cookieUserId != null &&
+              cookieUserId == currentSession.user.id;
 
-          if (isSameUser) {
-            // Preserve existing valid managed session with its refresh token
+          if (isSameSessionToken || isSameUser) {
+            // Proven same session or proven same user!
             syncSessionToHubClient(currentSession);
             debugPrint('[SsoAuthService] Preserved existing managed Supabase session for user ${currentSession.user.id}');
             return true;
@@ -425,6 +430,72 @@ class SsoAuthService {
       '$host/login?redirectTo=${Uri.encodeComponent(origin)}',
     );
     cookieReader.redirectTo(redirectUri.toString());
+  }
+
+  /// Handles native deep-link or web redirect auth callbacks (e.g. io.sunshade.dartup://login-callback)
+  /// and establishes Supabase and HubClient sessions.
+  Future<bool> handleAuthCallback(Uri uri) async {
+    String? accessToken = uri.queryParameters['access_token'] ??
+        uri.queryParameters['hub_jwt'] ??
+        uri.queryParameters['token'];
+    String? refreshToken = uri.queryParameters['refresh_token'];
+    String? userId = uri.queryParameters['user_id'];
+
+    if (uri.hasFragment) {
+      final fragmentParams = Uri.splitQueryString(uri.fragment);
+      accessToken ??= fragmentParams['access_token'] ??
+          fragmentParams['hub_jwt'] ??
+          fragmentParams['token'];
+      refreshToken ??= fragmentParams['refresh_token'];
+      userId ??= fragmentParams['user_id'];
+    }
+
+    if (accessToken == null || accessToken.trim().isEmpty) {
+      return false;
+    }
+
+    final client = _supabaseClient;
+    if (client != null) {
+      try {
+        if (refreshToken != null && refreshToken.isNotEmpty) {
+          final res = await client.auth.setSession(refreshToken);
+          if (res.session != null) {
+            syncSessionToHubClient(res.session!);
+            debugPrint('[SsoAuthService] Successfully hydrated callback session via refresh token');
+            return true;
+          }
+        }
+
+        final resolvedUserId = userId ?? _tryDecodeJwtSub(accessToken);
+        final sessionJson = jsonEncode({
+          'access_token': accessToken,
+          'token_type': 'bearer',
+          'user': {
+            'id': resolvedUserId ?? '',
+            'aud': 'authenticated',
+            'created_at': DateTime.now().toIso8601String(),
+            'app_metadata': {},
+            'user_metadata': {},
+          },
+        });
+        final res = await client.auth.recoverSession(sessionJson);
+        if (res.session != null) {
+          syncSessionToHubClient(res.session!);
+          debugPrint('[SsoAuthService] Successfully hydrated callback session via access token');
+          return true;
+        }
+      } catch (e) {
+        debugPrint('[SsoAuthService] Supabase callback handling exception: ${e.runtimeType}');
+      }
+    }
+
+    // Direct HubClient hydration fallback
+    HubClient.sharedService.authenticateWithSession(
+      accessToken: accessToken,
+      refreshToken: refreshToken,
+      userId: userId ?? _tryDecodeJwtSub(accessToken),
+    );
+    return true;
   }
 
   /// Opens an external URL in a new tab (_blank)

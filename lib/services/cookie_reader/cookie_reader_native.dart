@@ -7,10 +7,16 @@ CookieReader createCookieReader() => NativeCookieReader();
 
 /// Native platform implementation using package:url_launcher to open external URLs and Hub SSO
 class NativeCookieReader implements CookieReader {
-  NativeCookieReader({UrlLauncherHandler? launcher})
-      : _launcher = launcher ?? _defaultLauncher;
+  NativeCookieReader({
+    UrlLauncherHandler? launcher,
+    String? callbackUri,
+  })  : _launcher = launcher ?? _defaultLauncher,
+        _callbackUri = callbackUri ?? defaultNativeCallbackUri;
+
+  static const String defaultNativeCallbackUri = 'io.sunshade.dartup://login-callback';
 
   final UrlLauncherHandler _launcher;
+  final String _callbackUri;
 
   static Future<bool> _defaultLauncher(Uri uri) =>
       launchUrl(uri, mode: LaunchMode.externalApplication);
@@ -19,7 +25,7 @@ class NativeCookieReader implements CookieReader {
   String getCookieString() => '';
 
   @override
-  String getCurrentOrigin() => 'https://dartup.sunshade.icu';
+  String getCurrentOrigin() => _callbackUri;
 
   @override
   void redirectTo(String url) {
