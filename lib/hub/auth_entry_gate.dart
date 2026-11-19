@@ -45,7 +45,7 @@ class _AuthEntryGateState extends State<AuthEntryGate> {
     final hydrated = await _authService.hydrateFromCookie();
     if (mounted) {
       setState(() {
-        _isAuthenticated = hydrated || _authService.isAuthenticated;
+        _isAuthenticated = hydrated && _authService.isAuthenticated;
         _isLoading = false;
       });
     }

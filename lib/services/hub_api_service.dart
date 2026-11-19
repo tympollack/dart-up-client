@@ -357,8 +357,11 @@ class SupabaseRealtimeMatchChannel implements RealtimeMatchChannel {
 /// submission, `@digitalcanopy/achievements`, and Supabase Realtime spectator cheers.
 class HubApiService {
   static const String defaultBaseUrl = String.fromEnvironment(
-    'SUNSHADE_HUB_URL',
-    defaultValue: 'https://hub-stag.sunshade.icu',
+    'HUB_API_URL',
+    defaultValue: String.fromEnvironment(
+      'SUNSHADE_HUB_URL',
+      defaultValue: 'https://hub-stag.sunshade.icu',
+    ),
   );
 
   HubApiService({

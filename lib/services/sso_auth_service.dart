@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -16,10 +17,7 @@ class AppConfig {
     defaultValue: '',
   );
 
-  static const String hubApiUrl = String.fromEnvironment(
-    'HUB_API_URL',
-    defaultValue: 'https://hub-stag.sunshade.icu',
-  );
+  static const String hubApiUrl = HubApiService.defaultBaseUrl;
 }
 
 /// Parsed session extracted from .sunshade.icu cookies or Hub tokens
@@ -43,27 +41,93 @@ class ExtractedSession {
 
 /// Manages .sunshade.icu cookie inspection, Supabase auth hydration, and Hub SSO entry
 class SsoAuthService {
-  SsoAuthService({CookieReader? reader})
-      : cookieReader = reader ?? getPlatformCookieReader();
+  SsoAuthService({
+    CookieReader? reader,
+    SupabaseClient? supabaseClient,
+  })  : cookieReader = reader ?? getPlatformCookieReader(),
+        _customSupabaseClient = supabaseClient {
+    if (supabaseClient != null) {
+      _authSubscription?.cancel();
+      _authSubscription = supabaseClient.auth.onAuthStateChange.listen((data) {
+        final session = data.session;
+        if (session != null) {
+          syncSessionToHubClient(session);
+        } else if (data.event == AuthChangeEvent.signedOut) {
+          clearHubClientAuth();
+        }
+      });
+      final current = supabaseClient.auth.currentSession;
+      if (current != null && !current.isExpired) {
+        syncSessionToHubClient(current);
+      }
+    }
+  }
 
   final CookieReader cookieReader;
+  final SupabaseClient? _customSupabaseClient;
   static bool _supabaseInitialized = false;
+  static StreamSubscription<AuthState>? _authSubscription;
+
+  SupabaseClient? get _supabaseClient {
+    if (_customSupabaseClient != null) return _customSupabaseClient;
+    if (_supabaseInitialized) {
+      try {
+        return Supabase.instance.client;
+      } catch (_) {}
+    }
+    return null;
+  }
+
+  /// Synchronizes a validated Supabase session into HubClient.sharedService
+  static void syncSessionToHubClient(Session session) {
+    HubClient.sharedService.authenticateWithSession(
+      accessToken: session.accessToken,
+      refreshToken: session.refreshToken,
+      userId: session.user.id,
+    );
+  }
+
+  /// Resets HubClient.sharedService authorization on sign out
+  static void clearHubClientAuth() {
+    HubClient.sharedService.dispose();
+    HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+  }
 
   /// Initializes Supabase client with environment configuration
-  static Future<void> initializeSupabase() async {
+  static Future<void> initializeSupabase({String? url, String? anonKey}) async {
     if (_supabaseInitialized) return;
 
-    if (AppConfig.supabaseUrl.isNotEmpty && AppConfig.supabaseAnonKey.isNotEmpty) {
+    final resolvedUrl = url ?? AppConfig.supabaseUrl;
+    final resolvedAnonKey = anonKey ?? AppConfig.supabaseAnonKey;
+
+    if (resolvedUrl.isNotEmpty && resolvedAnonKey.isNotEmpty) {
       try {
         await Supabase.initialize(
-          url: AppConfig.supabaseUrl,
+          url: resolvedUrl,
           // ignore: deprecated_member_use
-          anonKey: AppConfig.supabaseAnonKey,
+          anonKey: resolvedAnonKey,
           authOptions: const FlutterAuthClientOptions(
             authFlowType: AuthFlowType.pkce,
           ),
         );
         _supabaseInitialized = true;
+
+        // Subscribe to auth state changes to keep HubClient in sync
+        _authSubscription?.cancel();
+        _authSubscription = Supabase.instance.client.auth.onAuthStateChange.listen((data) {
+          final session = data.session;
+          if (session != null) {
+            syncSessionToHubClient(session);
+          } else if (data.event == AuthChangeEvent.signedOut) {
+            clearHubClientAuth();
+          }
+        });
+
+        // Synchronize restored persistent session if available
+        final current = Supabase.instance.client.auth.currentSession;
+        if (current != null && !current.isExpired) {
+          syncSessionToHubClient(current);
+        }
       } catch (e) {
         // Redact any potential secrets from exception logs
         debugPrint('[SsoAuthService] Supabase initialization failed: ${e.runtimeType}');
@@ -216,7 +280,7 @@ class SsoAuthService {
   }
 
   /// Inspects document.cookie for active .sunshade.icu Supabase session cookies
-  /// and hydrates Supabase.instance.client.auth and HubClient.sharedService.
+  /// and hydrates Supabase and HubClient.sharedService.
   Future<bool> hydrateFromCookie() async {
     final cookieStr = cookieReader.getCookieString();
     final session = parseCookieSession(cookieStr);
@@ -225,61 +289,97 @@ class SsoAuthService {
       return false;
     }
 
-    // Hydrate HubClient session
-    HubClient.sharedService.authenticateWithSession(
-      accessToken: session.accessToken,
-      refreshToken: session.refreshToken,
-      userId: session.userId,
-    );
+    final client = _supabaseClient;
 
-    // Hydrate Supabase client if initialized
-    if (_supabaseInitialized) {
+    if (client != null) {
       try {
         if (session.refreshToken != null && session.refreshToken!.isNotEmpty) {
-          final res = await Supabase.instance.client.auth.setSession(session.refreshToken!);
-          if (res.session != null) {
+          // 1. Managed Supabase flow via refresh token
+          final res = await client.auth.setSession(session.refreshToken!);
+          final validatedSession = res.session;
+          if (validatedSession != null) {
+            syncSessionToHubClient(validatedSession);
             debugPrint('[SsoAuthService] Successfully hydrated Supabase session via refresh token');
+            return true;
+          } else {
+            debugPrint('[SsoAuthService] Supabase setSession returned null session');
+            return false;
           }
         } else {
-          final res = await Supabase.instance.client.auth.recoverSession(session.accessToken);
-          if (res.session != null) {
+          // 2. Access-only token: restore serialized session JSON into Supabase
+          final sessionJson = jsonEncode({
+            'access_token': session.accessToken,
+            'token_type': 'bearer',
+            'user': {
+              'id': session.userId ?? '',
+              'aud': 'authenticated',
+              'created_at': DateTime.now().toIso8601String(),
+              'app_metadata': {},
+              'user_metadata': {},
+            },
+          });
+          final res = await client.auth.recoverSession(sessionJson);
+          final recoveredSession = res.session;
+          if (recoveredSession != null) {
+            syncSessionToHubClient(recoveredSession);
             debugPrint('[SsoAuthService] Successfully hydrated Supabase session via access token');
+            return true;
+          } else {
+            debugPrint('[SsoAuthService] Supabase recoverSession returned null session');
+            return false;
           }
         }
+      } on AuthException catch (e) {
+        // Terminal session rejection (revoked or expired refresh token)
+        debugPrint('[SsoAuthService] Supabase session rejected (${e.statusCode}): ${e.message}');
+        return false;
       } catch (e) {
-        // Redact raw token data
+        // Transient network or serialization errors
         debugPrint('[SsoAuthService] Supabase session recovery boundary handled: ${e.runtimeType}');
+        return false;
       }
+    } else {
+      // Standalone Hub mode (Supabase uninitialized / unconfigured)
+      HubClient.sharedService.authenticateWithSession(
+        accessToken: session.accessToken,
+        refreshToken: session.refreshToken,
+        userId: session.userId,
+      );
+      return true;
     }
-
-    return true;
   }
 
   /// Whether player is currently authenticated via HubClient or Supabase
   bool get isAuthenticated {
-    if (HubClient.sharedService.isAuthenticated) return true;
-    if (_supabaseInitialized) {
+    final client = _supabaseClient;
+    if (client != null) {
       try {
-        return Supabase.instance.client.auth.currentSession != null;
+        final session = client.auth.currentSession;
+        if (session != null) {
+          if (!session.isExpired) {
+            if (HubClient.sharedService.accessToken != session.accessToken) {
+              syncSessionToHubClient(session);
+            }
+            return true;
+          }
+          return false;
+        }
       } catch (_) {}
     }
-    return false;
+    return HubClient.sharedService.isAuthenticated;
   }
 
   /// Signs in anonymously as guest on Supabase and binds HubClient guest session
   Future<bool> signInAsGuest() async {
+    final client = _supabaseClient;
     String? guestUserId;
 
-    if (_supabaseInitialized) {
+    if (client != null) {
       try {
-        final AuthResponse res = await Supabase.instance.client.auth.signInAnonymously();
+        final AuthResponse res = await client.auth.signInAnonymously();
         if (res.session != null) {
           guestUserId = res.user?.id;
-          HubClient.sharedService.authenticateWithSession(
-            accessToken: res.session!.accessToken,
-            refreshToken: res.session?.refreshToken,
-            userId: guestUserId,
-          );
+          syncSessionToHubClient(res.session!);
           debugPrint('[SsoAuthService] Guest session active');
           return true;
         }
@@ -301,8 +401,11 @@ class SsoAuthService {
   /// Redirects browser to SunShade Hub login with redirectTo set to current origin
   void loginViaHub({String? currentOrigin}) {
     final origin = currentOrigin ?? cookieReader.getCurrentOrigin();
+    final hubHost = AppConfig.hubApiUrl == 'https://hub-stag.sunshade.icu'
+        ? 'https://hub.sunshade.icu'
+        : AppConfig.hubApiUrl;
     final redirectUri = Uri.parse(
-      'https://hub.sunshade.icu/login?redirectTo=${Uri.encodeComponent(origin)}',
+      '$hubHost/login?redirectTo=${Uri.encodeComponent(origin)}',
     );
     cookieReader.redirectTo(redirectUri.toString());
   }

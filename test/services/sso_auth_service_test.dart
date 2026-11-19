@@ -5,6 +5,7 @@ import 'package:sd_client/hub/hub_client.dart';
 import 'package:sd_client/hub/auth_entry_gate.dart';
 import 'package:sd_client/services/sso_auth_service.dart';
 import 'package:sd_client/services/cookie_reader/cookie_reader_stub.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() {
   group('TASK-CF-DARTUP-02: SsoAuthService & Cookie Parsing', () {
@@ -219,6 +220,188 @@ void main() {
 
       await tester.tap(find.byKey(const Key('privacy_link')));
       expect(stubReader.lastOpenedUrl, equals('https://sunshade.icu/privacy'));
+    });
+
+    testWidgets('AuthEntryGate displays login gate and does not open game when cookie session is rejected', (WidgetTester tester) async {
+      HubClient.sharedService.dispose();
+      HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+
+      final client = SupabaseClient(
+        'https://rweehbzsflhhtwjrjnvy.supabase.co',
+        'dummy_anon_key',
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+      final stubReader = StubCookieReader();
+      stubReader.stubCookie = 'sb-access-token=stale_token; sb-refresh-token=revoked_token_456';
+      final authService = SsoAuthService(reader: stubReader, supabaseClient: client);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: AuthEntryGate(
+            authService: authService,
+            child: const Text('Game Running'),
+          ),
+        ),
+      );
+
+      await tester.pumpAndSettle();
+
+      // Because cookie refresh token was rejected, game is NOT opened!
+      expect(find.text('Game Running'), findsNothing);
+      expect(find.text('DART UP!'), findsOneWidget);
+      expect(find.byKey(const Key('login_via_hub_button')), findsOneWidget);
+      expect(find.byKey(const Key('play_as_guest_button')), findsOneWidget);
+
+      client.dispose();
+    });
+    test('HubApiService.defaultBaseUrl, AppConfig.hubApiUrl, and HubClient.baseUrl are unified', () {
+      expect(AppConfig.hubApiUrl, equals(HubApiService.defaultBaseUrl));
+      expect(HubClient.baseUrl, equals(HubApiService.defaultBaseUrl));
+    });
+
+    test('Supabase session recovery synchronizes credentials into HubClient.sharedService', () async {
+      HubClient.sharedService.dispose();
+      HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+
+      final client = SupabaseClient(
+        'https://rweehbzsflhhtwjrjnvy.supabase.co',
+        'dummy_anon_key',
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+      final authService = SsoAuthService(supabaseClient: client);
+
+      final sessionJson = jsonEncode({
+        'access_token': 'refreshed_access_token_999',
+        'refresh_token': 'refreshed_refresh_token_999',
+        'token_type': 'bearer',
+        'user': {
+          'id': 'pilot_uuid_999',
+          'app_metadata': {},
+          'user_metadata': {},
+          'aud': 'authenticated',
+          'created_at': '2026-01-01T00:00:00Z',
+        },
+      });
+
+      // Recovering a session into Supabase notifies authStateChange listener
+      await client.auth.recoverSession(sessionJson);
+
+      expect(authService.isAuthenticated, isTrue);
+      expect(HubClient.sharedService.accessToken, equals('refreshed_access_token_999'));
+      expect(HubClient.sharedService.refreshToken, equals('refreshed_refresh_token_999'));
+      expect(HubClient.sharedService.userId, equals('pilot_uuid_999'));
+      client.dispose();
+    });
+
+    test('Restored persisted Supabase session populates HubClient when calling isAuthenticated', () async {
+      HubClient.sharedService.dispose();
+      HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+
+      final client = SupabaseClient(
+        'https://rweehbzsflhhtwjrjnvy.supabase.co',
+        'dummy_anon_key',
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+      final sessionJson = jsonEncode({
+        'access_token': 'persisted_access_jwt',
+        'token_type': 'bearer',
+        'user': {
+          'id': 'persisted_pilot_1',
+          'app_metadata': {},
+          'user_metadata': {},
+          'aud': 'authenticated',
+          'created_at': '2026-01-01T00:00:00Z',
+        },
+      });
+      await client.auth.recoverSession(sessionJson);
+
+      // Reset HubClient to emulate app start with restored Supabase session but clean HubClient
+      HubClient.sharedService.dispose();
+      HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+      expect(HubClient.sharedService.accessToken, isNull);
+
+      final authService = SsoAuthService(supabaseClient: client);
+      // Calling isAuthenticated should sync credentials from Supabase to HubClient
+      expect(authService.isAuthenticated, isTrue);
+      expect(HubClient.sharedService.accessToken, equals('persisted_access_jwt'));
+      expect(HubClient.sharedService.userId, equals('persisted_pilot_1'));
+      client.dispose();
+    });
+
+    test('Supabase session sign-out clears HubClient.sharedService authorization', () async {
+      final client = SupabaseClient(
+        'https://rweehbzsflhhtwjrjnvy.supabase.co',
+        'dummy_anon_key',
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+      final authService = SsoAuthService(supabaseClient: client);
+
+      final sessionJson = jsonEncode({
+        'access_token': 'session_to_sign_out',
+        'token_type': 'bearer',
+        'user': {
+          'id': 'pilot_sign_out',
+          'app_metadata': {},
+          'user_metadata': {},
+          'aud': 'authenticated',
+          'created_at': '2026-01-01T00:00:00Z',
+        },
+      });
+      await client.auth.recoverSession(sessionJson);
+      expect(HubClient.sharedService.accessToken, equals('session_to_sign_out'));
+
+      try {
+        await client.auth.signOut(scope: SignOutScope.local);
+      } catch (_) {}
+      expect(HubClient.sharedService.accessToken, isNull);
+      expect(authService.isAuthenticated, isFalse);
+      client.dispose();
+    });
+
+    test('Access-only cookie session recovers into Supabase and HubClient without FormatException', () async {
+      HubClient.sharedService.dispose();
+      HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+
+      final client = SupabaseClient(
+        'https://rweehbzsflhhtwjrjnvy.supabase.co',
+        'dummy_anon_key',
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+      final stubReader = StubCookieReader();
+      stubReader.stubCookie = 'sb-access-token=access_only_token_abc; user_id=pilot_access_only';
+
+      final authService = SsoAuthService(reader: stubReader, supabaseClient: client);
+      final result = await authService.hydrateFromCookie();
+
+      expect(result, isTrue);
+      expect(authService.isAuthenticated, isTrue);
+      expect(HubClient.sharedService.accessToken, equals('access_only_token_abc'));
+      expect(HubClient.sharedService.userId, equals('pilot_access_only'));
+      expect(client.auth.currentSession?.accessToken, equals('access_only_token_abc'));
+      client.dispose();
+    });
+
+    test('Revoked or invalid refresh token in cookie does not authenticate and returns false', () async {
+      HubClient.sharedService.dispose();
+      HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+
+      final client = SupabaseClient(
+        'https://rweehbzsflhhtwjrjnvy.supabase.co',
+        'dummy_anon_key',
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+      final stubReader = StubCookieReader();
+      // Cookie has invalid refresh token
+      stubReader.stubCookie = 'sb-access-token=stale_token; sb-refresh-token=revoked_refresh_token_123';
+
+      final authService = SsoAuthService(reader: stubReader, supabaseClient: client);
+      final result = await authService.hydrateFromCookie();
+
+      // Hydration fails because setSession fails on invalid refresh token
+      expect(result, isFalse);
+      expect(authService.isAuthenticated, isFalse);
+      expect(HubClient.sharedService.accessToken, isNull);
+      client.dispose();
     });
   });
 }
