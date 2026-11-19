@@ -18,19 +18,48 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="Dart Up! - Real-time space gladiator combat and tactical drone swarm operations.">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#f97316">
 
-  <!-- iOS meta tags & icons -->
+  <!-- iOS / Apple meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="sd_client">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Dart Up!">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
+  <link rel="apple-touch-icon" sizes="512x512" href="icons/Icon-512.png">
+
+  <!-- Preconnect to external asset CDNs with anonymous CORS -->
+  <link rel="preconnect" href="https://assets.sunshade.icu" crossorigin="anonymous">
+  <link rel="dns-prefetch" href="https://assets.sunshade.icu">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>sd_client</title>
+  <title>Dart Up!</title>
   <link rel="manifest" href="manifest.json">
+
+  <script>
+    // Ensure external Kenney/R2 assets load with anonymous CORS (crossOrigin = 'anonymous')
+    const _OrigImage = window.Image;
+    if (_OrigImage) {
+      window.Image = class extends _OrigImage {
+        constructor(width, height) {
+          super(width, height);
+          this.crossOrigin = 'anonymous';
+        }
+      };
+    }
+    const _origCreateElement = document.createElement.bind(document);
+    document.createElement = function(tagName, options) {
+      const el = _origCreateElement(tagName, options);
+      if (tagName && tagName.toLowerCase() === 'img') {
+        el.crossOrigin = 'anonymous';
+      }
+      return el;
+    };
+  </script>
 </head>
 <body>
   <!--
