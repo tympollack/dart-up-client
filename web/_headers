@@ -1,0 +1,10 @@
+/*
+  X-Frame-Options: SAMEORIGIN
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+
+/manifest.json
+  Cache-Control: public, max-age=3600
+
+/flutter_service_worker.js
+  Cache-Control: no-cache, no-store, must-revalidate
