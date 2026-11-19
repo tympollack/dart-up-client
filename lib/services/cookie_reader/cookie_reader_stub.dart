@@ -1,7 +1,6 @@
 import 'cookie_reader_interface.dart';
 
-CookieReader createCookieReader() => StubCookieReader();
-
+/// Test double implementing CookieReader for unit and widget testing
 class StubCookieReader implements CookieReader {
   String stubCookie = '';
   String stubOrigin = 'https://dartup-stag.sunshade.icu';

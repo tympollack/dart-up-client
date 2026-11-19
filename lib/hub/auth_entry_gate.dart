@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:sd_client/services/sso_auth_service.dart';
 
@@ -8,17 +9,20 @@ class AuthEntryGate extends StatefulWidget {
     super.key,
     required this.child,
     this.authService,
+    this.onLoginCallback,
   });
 
   final Widget child;
   final SsoAuthService? authService;
+  final Stream<Uri>? onLoginCallback;
 
   @override
-  State<AuthEntryGate> createState() => _AuthEntryGateState();
+  State<AuthEntryGate> createState() => AuthEntryGateState();
 }
 
-class _AuthEntryGateState extends State<AuthEntryGate> {
+class AuthEntryGateState extends State<AuthEntryGate> {
   late final SsoAuthService _authService;
+  StreamSubscription<Uri>? _callbackSub;
   bool _isLoading = true;
   bool _isAuthenticated = false;
 
@@ -26,7 +30,26 @@ class _AuthEntryGateState extends State<AuthEntryGate> {
   void initState() {
     super.initState();
     _authService = widget.authService ?? SsoAuthService();
+    _callbackSub = widget.onLoginCallback?.listen(handleAuthCallback);
     _checkAuthentication();
+  }
+
+  @override
+  void dispose() {
+    _callbackSub?.cancel();
+    super.dispose();
+  }
+
+  /// Processes deep-link callback URI and transitions state to authenticated
+  Future<bool> handleAuthCallback(Uri uri) async {
+    final success = await _authService.handleAuthCallback(uri);
+    if (success && mounted) {
+      setState(() {
+        _isAuthenticated = true;
+        _isLoading = false;
+      });
+    }
+    return success;
   }
 
   Future<void> _checkAuthentication() async {
