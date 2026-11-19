@@ -306,7 +306,26 @@ class SsoAuthService {
             return false;
           }
         } else {
-          // 2. Access-only token: restore serialized session JSON into Supabase
+          // 2. Access-only token: check if an active managed session already exists for the same user
+          final currentSession = client.auth.currentSession;
+          final bool hasValidManagedSession = currentSession != null &&
+              !currentSession.isExpired &&
+              currentSession.refreshToken != null &&
+              currentSession.refreshToken!.isNotEmpty;
+
+          final cookieUserId = session.userId;
+          final bool isSameUser = hasValidManagedSession &&
+              (cookieUserId == null || cookieUserId == currentSession.user.id);
+
+          if (isSameUser) {
+            // Preserve existing valid managed session with its refresh token
+            syncSessionToHubClient(currentSession);
+            debugPrint('[SsoAuthService] Preserved existing managed Supabase session for user ${currentSession.user.id}');
+            return true;
+          }
+
+          // Either no valid managed session exists, or cookie belongs to a different user (account switch).
+          // Do NOT transfer refresh tokens across different user identities.
           final sessionJson = jsonEncode({
             'access_token': session.accessToken,
             'token_type': 'bearer',
@@ -399,13 +418,11 @@ class SsoAuthService {
   }
 
   /// Redirects browser to SunShade Hub login with redirectTo set to current origin
-  void loginViaHub({String? currentOrigin}) {
+  void loginViaHub({String? currentOrigin, String? hubHost}) {
     final origin = currentOrigin ?? cookieReader.getCurrentOrigin();
-    final hubHost = AppConfig.hubApiUrl == 'https://hub-stag.sunshade.icu'
-        ? 'https://hub.sunshade.icu'
-        : AppConfig.hubApiUrl;
+    final host = hubHost ?? AppConfig.hubApiUrl;
     final redirectUri = Uri.parse(
-      '$hubHost/login?redirectTo=${Uri.encodeComponent(origin)}',
+      '$host/login?redirectTo=${Uri.encodeComponent(origin)}',
     );
     cookieReader.redirectTo(redirectUri.toString());
   }

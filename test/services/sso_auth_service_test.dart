@@ -5,6 +5,7 @@ import 'package:sd_client/hub/hub_client.dart';
 import 'package:sd_client/hub/auth_entry_gate.dart';
 import 'package:sd_client/services/sso_auth_service.dart';
 import 'package:sd_client/services/cookie_reader/cookie_reader_stub.dart';
+import 'package:sd_client/services/cookie_reader/cookie_reader_native.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 void main() {
@@ -125,7 +126,15 @@ void main() {
       stubReader.stubOrigin = 'https://dartup-stag.sunshade.icu';
       final authService = SsoAuthService(reader: stubReader);
 
+      // Default redirects to AppConfig.hubApiUrl
       authService.loginViaHub();
+      expect(
+        stubReader.lastRedirectUrl,
+        equals('${AppConfig.hubApiUrl}/login?redirectTo=https%3A%2F%2Fdartup-stag.sunshade.icu'),
+      );
+
+      // Explicit hubHost override
+      authService.loginViaHub(hubHost: 'https://hub.sunshade.icu');
       expect(
         stubReader.lastRedirectUrl,
         equals('https://hub.sunshade.icu/login?redirectTo=https%3A%2F%2Fdartup-stag.sunshade.icu'),
@@ -402,6 +411,124 @@ void main() {
       expect(authService.isAuthenticated, isFalse);
       expect(HubClient.sharedService.accessToken, isNull);
       client.dispose();
+    });
+
+    test('Preserves existing valid managed session when access-only cookie belongs to the same user', () async {
+      HubClient.sharedService.dispose();
+      HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+
+      final client = SupabaseClient(
+        'https://rweehbzsflhhtwjrjnvy.supabase.co',
+        'dummy_anon_key',
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+
+      // 1. Establish an existing managed session with a valid refresh token
+      final managedSessionJson = jsonEncode({
+        'access_token': 'saved_managed_access_token',
+        'refresh_token': 'saved_managed_refresh_token',
+        'token_type': 'bearer',
+        'user': {
+          'id': 'pilot_same_user_1',
+          'app_metadata': {},
+          'user_metadata': {},
+          'aud': 'authenticated',
+          'created_at': '2026-01-01T00:00:00Z',
+        },
+      });
+      await client.auth.recoverSession(managedSessionJson);
+      expect(client.auth.currentSession?.refreshToken, equals('saved_managed_refresh_token'));
+
+      // 2. Hydrate an access-only cookie for the SAME user (e.g. sb-access-token without refresh token)
+      final stubReader = StubCookieReader();
+      stubReader.stubCookie = 'sb-access-token=new_cookie_access_jwt; user_id=pilot_same_user_1';
+
+      final authService = SsoAuthService(reader: stubReader, supabaseClient: client);
+      final result = await authService.hydrateFromCookie();
+
+      expect(result, isTrue);
+      expect(authService.isAuthenticated, isTrue);
+      // The managed session with its refresh token is preserved!
+      expect(client.auth.currentSession?.refreshToken, equals('saved_managed_refresh_token'));
+      expect(HubClient.sharedService.accessToken, equals('saved_managed_access_token'));
+      expect(HubClient.sharedService.refreshToken, equals('saved_managed_refresh_token'));
+      expect(HubClient.sharedService.userId, equals('pilot_same_user_1'));
+      client.dispose();
+    });
+
+    test('Account switch: access-only cookie for a different user does not inherit prior refresh token', () async {
+      HubClient.sharedService.dispose();
+      HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+
+      final client = SupabaseClient(
+        'https://rweehbzsflhhtwjrjnvy.supabase.co',
+        'dummy_anon_key',
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+
+      // 1. Prior user session with refresh token
+      final priorSessionJson = jsonEncode({
+        'access_token': 'user1_access_token',
+        'refresh_token': 'user1_refresh_token',
+        'token_type': 'bearer',
+        'user': {
+          'id': 'user_1_id',
+          'app_metadata': {},
+          'user_metadata': {},
+          'aud': 'authenticated',
+          'created_at': '2026-01-01T00:00:00Z',
+        },
+      });
+      await client.auth.recoverSession(priorSessionJson);
+
+      // 2. Cookie for a DIFFERENT user (user_2_id) arrives with access token only
+      final stubReader = StubCookieReader();
+      stubReader.stubCookie = 'sb-access-token=user2_access_token; user_id=user_2_id';
+
+      final authService = SsoAuthService(reader: stubReader, supabaseClient: client);
+      final result = await authService.hydrateFromCookie();
+
+      expect(result, isTrue);
+      // User 2 is active, and User 1's refresh token was NOT transferred
+      expect(client.auth.currentSession?.user.id, equals('user_2_id'));
+      expect(client.auth.currentSession?.accessToken, equals('user2_access_token'));
+      expect(client.auth.currentSession?.refreshToken, isNull);
+      expect(HubClient.sharedService.userId, equals('user_2_id'));
+      expect(HubClient.sharedService.accessToken, equals('user2_access_token'));
+      expect(HubClient.sharedService.refreshToken, isNull);
+      client.dispose();
+    });
+  });
+
+  group('PR-12: NativeCookieReader & Navigation Adapter', () {
+    test('NativeCookieReader getCookieString returns empty and getCurrentOrigin returns default origin', () {
+      final nativeReader = NativeCookieReader();
+      expect(nativeReader.getCookieString(), isEmpty);
+      expect(nativeReader.getCurrentOrigin(), equals('https://dartup.sunshade.icu'));
+    });
+
+    test('NativeCookieReader redirectTo invokes launcher handler with valid URI', () {
+      Uri? launchedUri;
+      final nativeReader = NativeCookieReader(launcher: (uri) async {
+        launchedUri = uri;
+        return true;
+      });
+
+      nativeReader.redirectTo('https://hub.sunshade.icu/login?redirectTo=app');
+      expect(launchedUri, isNotNull);
+      expect(launchedUri.toString(), equals('https://hub.sunshade.icu/login?redirectTo=app'));
+    });
+
+    test('NativeCookieReader openNewTab invokes launcher handler with valid URI', () {
+      Uri? openedUri;
+      final nativeReader = NativeCookieReader(launcher: (uri) async {
+        openedUri = uri;
+        return true;
+      });
+
+      nativeReader.openNewTab('https://sunshade.icu/eula');
+      expect(openedUri, isNotNull);
+      expect(openedUri.toString(), equals('https://sunshade.icu/eula'));
     });
   });
 }
