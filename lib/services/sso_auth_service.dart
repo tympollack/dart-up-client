@@ -55,6 +55,10 @@ class SsoAuthService {
         } else if (data.event == AuthChangeEvent.signedOut) {
           clearHubClientAuth();
         }
+      }, onError: (Object e) {
+        // Retryable refresh failures (network/5xx) are published on the stream;
+        // GoTrue keeps the existing session, so just avoid an unhandled error.
+        debugPrint('[SsoAuthService] Auth state stream error: ${e.runtimeType}');
       });
       final current = supabaseClient.auth.currentSession;
       if (current != null && !current.isExpired) {
@@ -121,6 +125,8 @@ class SsoAuthService {
           } else if (data.event == AuthChangeEvent.signedOut) {
             clearHubClientAuth();
           }
+        }, onError: (Object e) {
+          debugPrint('[SsoAuthService] Auth state stream error: ${e.runtimeType}');
         });
 
         // Synchronize restored persistent session if available
@@ -344,6 +350,9 @@ class SsoAuthService {
               return false;
             }
           } on AuthException catch (e) {
+            // Transient network/5xx failures keep GoTrue's existing managed
+            // session (and its refresh token); let the outer boundary handle it.
+            if (e is AuthRetryableFetchException) rethrow;
             // The shared cookie's refresh token was revoked/rotated (e.g. Hub
             // already consumed it). If the cookie's access token is still
             // valid, fall back to it instead of dead-ending on the login screen.

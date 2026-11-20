@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:sd_client/hub/hub_client.dart';
 import 'package:sd_client/hub/auth_entry_gate.dart';
 import 'package:sd_client/services/sso_auth_service.dart';
@@ -438,6 +440,48 @@ void main() {
       expect(HubClient.sharedService.userId, equals('pilot_fallback'));
       client.dispose();
     });
+
+    test('Transient refresh failure (HTTP 503) keeps existing managed session and its refresh token', () async {
+      HubClient.sharedService.dispose();
+      HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+
+      String b64(Map<String, dynamic> m) => base64Url.encode(utf8.encode(jsonEncode(m))).replaceAll('=', '');
+      final exp = DateTime.now().toUtc().add(const Duration(hours: 1)).millisecondsSinceEpoch ~/ 1000;
+      final jwt = '${b64({'alg': 'HS256'})}.${b64({'sub': 'pilot_transient', 'exp': exp})}.sig';
+
+      final client = SupabaseClient(
+        'https://rweehbzsflhhtwjrjnvy.supabase.co',
+        'dummy_anon_key',
+        httpClient: MockClient((_) async => http.Response('', 503)),
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+      await client.auth.recoverSession(jsonEncode({
+        'access_token': 'restored_access_token',
+        'refresh_token': 'R1',
+        'token_type': 'bearer',
+        'user': {
+          'id': 'pilot_transient',
+          'app_metadata': {},
+          'user_metadata': {},
+          'aud': 'authenticated',
+          'created_at': '2026-01-01T00:00:00Z',
+        },
+      }));
+
+      final stubReader = StubCookieReader();
+      stubReader.stubCookie = 'sb-access-token=$jwt; sb-refresh-token=cookie_refresh';
+
+      // GoTrue also publishes retryable refresh failures on the auth stream.
+      final sub = client.auth.onAuthStateChange.listen((_) {}, onError: (_) {});
+
+      final authService = SsoAuthService(reader: stubReader, supabaseClient: client);
+      await authService.hydrateFromCookie();
+
+      // The restored managed session must not be replaced by an access-only session.
+      expect(client.auth.currentSession?.refreshToken, equals('R1'));
+      await sub.cancel();
+      client.dispose();
+    }, timeout: const Timeout(Duration(seconds: 60)));
 
     test('Preserves existing valid managed session when access-only cookie belongs to the same user', () async {
       HubClient.sharedService.dispose();
