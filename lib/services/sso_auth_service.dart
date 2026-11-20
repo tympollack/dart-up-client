@@ -279,6 +279,43 @@ class SsoAuthService {
     return null;
   }
 
+  /// True only if [jwt] is a decodable JWT whose `exp` claim is in the future.
+  static bool _isJwtUnexpired(String jwt) {
+    final parts = jwt.split('.');
+    if (parts.length != 3) return false;
+    try {
+      final payload = jsonDecode(
+        utf8.decode(base64Url.decode(base64Url.normalize(parts[1]))),
+      );
+      final exp = payload is Map<String, dynamic> ? payload['exp'] : null;
+      if (exp is! num) return false;
+      final expiry = DateTime.fromMillisecondsSinceEpoch(exp.toInt() * 1000, isUtc: true);
+      return expiry.isAfter(DateTime.now().toUtc().add(const Duration(seconds: 30)));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<Session?> _recoverFromAccessToken(SupabaseClient client, ExtractedSession session) async {
+    try {
+      final sessionJson = jsonEncode({
+        'access_token': session.accessToken,
+        'token_type': 'bearer',
+        'user': {
+          'id': session.userId ?? '',
+          'aud': 'authenticated',
+          'created_at': DateTime.now().toIso8601String(),
+          'app_metadata': {},
+          'user_metadata': {},
+        },
+      });
+      return (await client.auth.recoverSession(sessionJson)).session;
+    } catch (e) {
+      debugPrint('[SsoAuthService] Access-token fallback failed: ${e.runtimeType}');
+      return null;
+    }
+  }
+
   /// Inspects document.cookie for active .sunshade.icu Supabase session cookies
   /// and hydrates Supabase and HubClient.sharedService.
   Future<bool> hydrateFromCookie() async {
@@ -295,14 +332,29 @@ class SsoAuthService {
       try {
         if (session.refreshToken != null && session.refreshToken!.isNotEmpty) {
           // 1. Managed Supabase flow via refresh token
-          final res = await client.auth.setSession(session.refreshToken!);
-          final validatedSession = res.session;
-          if (validatedSession != null) {
-            syncSessionToHubClient(validatedSession);
-            debugPrint('[SsoAuthService] Successfully hydrated Supabase session via refresh token');
-            return true;
-          } else {
-            debugPrint('[SsoAuthService] Supabase setSession returned null session');
+          try {
+            final res = await client.auth.setSession(session.refreshToken!);
+            final validatedSession = res.session;
+            if (validatedSession != null) {
+              syncSessionToHubClient(validatedSession);
+              debugPrint('[SsoAuthService] Successfully hydrated Supabase session via refresh token');
+              return true;
+            } else {
+              debugPrint('[SsoAuthService] Supabase setSession returned null session');
+              return false;
+            }
+          } on AuthException catch (e) {
+            // The shared cookie's refresh token was revoked/rotated (e.g. Hub
+            // already consumed it). If the cookie's access token is still
+            // valid, fall back to it instead of dead-ending on the login screen.
+            debugPrint('[SsoAuthService] Refresh token rejected (${e.statusCode}): ${e.message}');
+            if (!_isJwtUnexpired(session.accessToken)) return false;
+            final recovered = await _recoverFromAccessToken(client, session);
+            if (recovered != null) {
+              syncSessionToHubClient(recovered);
+              debugPrint('[SsoAuthService] Recovered Supabase session via unexpired access token after refresh rejection');
+              return true;
+            }
             return false;
           }
         } else {

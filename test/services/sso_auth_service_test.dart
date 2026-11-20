@@ -414,6 +414,31 @@ void main() {
       client.dispose();
     });
 
+    test('Revoked refresh token falls back to unexpired access token JWT', () async {
+      HubClient.sharedService.dispose();
+      HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
+
+      String b64(Map<String, dynamic> m) => base64Url.encode(utf8.encode(jsonEncode(m))).replaceAll('=', '');
+      final exp = DateTime.now().toUtc().add(const Duration(hours: 1)).millisecondsSinceEpoch ~/ 1000;
+      final jwt = '${b64({'alg': 'HS256'})}.${b64({'sub': 'pilot_fallback', 'exp': exp})}.sig';
+
+      final client = SupabaseClient(
+        'https://rweehbzsflhhtwjrjnvy.supabase.co',
+        'dummy_anon_key',
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+      final stubReader = StubCookieReader();
+      stubReader.stubCookie = 'sb-access-token=$jwt; sb-refresh-token=revoked_refresh_token_123';
+
+      final authService = SsoAuthService(reader: stubReader, supabaseClient: client);
+      final result = await authService.hydrateFromCookie();
+
+      expect(result, isTrue);
+      expect(HubClient.sharedService.accessToken, equals(jwt));
+      expect(HubClient.sharedService.userId, equals('pilot_fallback'));
+      client.dispose();
+    });
+
     test('Preserves existing valid managed session when access-only cookie belongs to the same user', () async {
       HubClient.sharedService.dispose();
       HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);
