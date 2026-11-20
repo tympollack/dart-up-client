@@ -17,7 +17,7 @@ class AppConfig {
     defaultValue: '',
   );
 
-  static const String hubApiUrl = HubApiService.defaultBaseUrl;
+  static String get hubApiUrl => HubApiService.defaultBaseUrl;
 }
 
 /// Parsed session extracted from .sunshade.icu cookies or Hub tokens
@@ -425,7 +425,7 @@ class SsoAuthService {
   /// Redirects browser to SunShade Hub login with redirectTo set to current origin
   void loginViaHub({String? currentOrigin, String? hubHost}) {
     final origin = currentOrigin ?? cookieReader.getCurrentOrigin();
-    final host = hubHost ?? AppConfig.hubApiUrl;
+    final host = HubApiService.sanitizeBaseUrl(hubHost ?? AppConfig.hubApiUrl);
     final redirectUri = Uri.parse(
       '$host/login?redirectTo=${Uri.encodeComponent(origin)}',
     );

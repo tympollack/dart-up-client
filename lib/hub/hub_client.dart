@@ -4,7 +4,7 @@ import 'package:sd_client/services/hub_api_service.dart';
 export 'package:sd_client/services/hub_api_service.dart';
 
 class HubClient {
-  static const String baseUrl = HubApiService.defaultBaseUrl;
+  static String get baseUrl => HubApiService.defaultBaseUrl;
   static HubApiService sharedService = HubApiService(baseUrl: baseUrl);
   static int _matchSequence = 0;
 

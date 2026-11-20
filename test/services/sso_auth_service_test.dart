@@ -269,6 +269,34 @@ void main() {
       expect(HubClient.baseUrl, equals(HubApiService.defaultBaseUrl));
     });
 
+    test('HubApiService.sanitizeBaseUrl strips trailing slashes and /api paths', () {
+      expect(HubApiService.sanitizeBaseUrl('https://hub.sunshade.icu'), equals('https://hub.sunshade.icu'));
+      expect(HubApiService.sanitizeBaseUrl('https://hub.sunshade.icu/'), equals('https://hub.sunshade.icu'));
+      expect(HubApiService.sanitizeBaseUrl('https://hub.sunshade.icu/api'), equals('https://hub.sunshade.icu'));
+      expect(HubApiService.sanitizeBaseUrl('https://hub.sunshade.icu/api/'), equals('https://hub.sunshade.icu'));
+      expect(HubApiService.sanitizeBaseUrl('https://hub-stag.sunshade.icu/api/'), equals('https://hub-stag.sunshade.icu'));
+    });
+
+    test('SsoAuthService.loginViaHub normalizes /api paths in hubHost to /login route', () {
+      final stubReader = StubCookieReader();
+      stubReader.stubOrigin = 'https://dartup.sunshade.icu';
+      final authService = SsoAuthService(reader: stubReader);
+
+      // When HUB_API_URL is configured with /api
+      authService.loginViaHub(hubHost: 'https://hub.sunshade.icu/api');
+      expect(
+        stubReader.lastRedirectUrl,
+        equals('https://hub.sunshade.icu/login?redirectTo=https%3A%2F%2Fdartup.sunshade.icu'),
+      );
+
+      // When trailing slash is present
+      authService.loginViaHub(hubHost: 'https://hub.sunshade.icu/api/');
+      expect(
+        stubReader.lastRedirectUrl,
+        equals('https://hub.sunshade.icu/login?redirectTo=https%3A%2F%2Fdartup.sunshade.icu'),
+      );
+    });
+
     test('Supabase session recovery synchronizes credentials into HubClient.sharedService', () async {
       HubClient.sharedService.dispose();
       HubClient.sharedService = HubApiService(baseUrl: HubClient.baseUrl);

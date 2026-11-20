@@ -356,21 +356,42 @@ class SupabaseRealtimeMatchChannel implements RealtimeMatchChannel {
 /// Service connecting *Dart Up!* to SunShade Hub SSO authentication, post-match
 /// submission, `@digitalcanopy/achievements`, and Supabase Realtime spectator cheers.
 class HubApiService {
-  static const String defaultBaseUrl = String.fromEnvironment(
-    'HUB_API_URL',
+  static const String _rawDefaultBaseUrl = String.fromEnvironment(
+    'HUB_URL',
     defaultValue: String.fromEnvironment(
-      'SUNSHADE_HUB_URL',
-      defaultValue: 'https://hub-stag.sunshade.icu',
+      'HUB_API_URL',
+      defaultValue: String.fromEnvironment(
+        'SUNSHADE_HUB_URL',
+        defaultValue: 'https://hub-stag.sunshade.icu',
+      ),
     ),
   );
 
+  /// Normalizes Hub root URL by stripping trailing slashes and '/api' paths
+  static String sanitizeBaseUrl(String url) {
+    var sanitized = url.trim();
+    while (sanitized.endsWith('/')) {
+      sanitized = sanitized.substring(0, sanitized.length - 1);
+    }
+    if (sanitized.endsWith('/api')) {
+      sanitized = sanitized.substring(0, sanitized.length - 4);
+    }
+    while (sanitized.endsWith('/')) {
+      sanitized = sanitized.substring(0, sanitized.length - 1);
+    }
+    return sanitized;
+  }
+
+  static String get defaultBaseUrl => sanitizeBaseUrl(_rawDefaultBaseUrl);
+
   HubApiService({
-    this.baseUrl = defaultBaseUrl,
+    String? baseUrl,
     http.Client? httpClient,
     this.maxRetries = 3,
     this.retryDelay = const Duration(milliseconds: 20),
     this.realtimePollInterval = const Duration(seconds: 2),
-  })  : _ownsHttpClient = httpClient == null,
+  })  : baseUrl = sanitizeBaseUrl(baseUrl ?? _rawDefaultBaseUrl),
+        _ownsHttpClient = httpClient == null,
         _httpClient = httpClient ?? http.Client();
 
   final String baseUrl;
