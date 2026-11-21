@@ -3,8 +3,14 @@
 //
 // Native/mobile disk persistence for failed telemetry uploads in the app's
 // local documents / support directory.
+//
+// Stores each pending recap in its own atomically replaced per-match file
+// (`recap_<safeMatchId>.json`) and serializes mutations per directory path so
+// concurrent flushes and End Match saves across separate store instances never
+// overwrite or lose each other's recaps.
 // =============================================================================
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -15,8 +21,8 @@ TelemetryOfflineStore createPlatformTelemetryOfflineStore({
 }) =>
     NativeDiskTelemetryOfflineStore(directoryPath: customDirectoryPath);
 
-/// Persists pending telemetry records as JSON files inside the local app
-/// documents/data directory on native and mobile platforms.
+/// Persists pending telemetry records as individual atomic JSON files inside
+/// the local app documents/data directory on native and mobile platforms.
 class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
   NativeDiskTelemetryOfflineStore({String? directoryPath})
       : _directoryPath = directoryPath ?? _resolveDefaultDirectoryPath();
@@ -24,6 +30,25 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
   final String _directoryPath;
 
   String get directoryPath => _directoryPath;
+
+  /// Process-wide per-directory async mutex chain so concurrent operations on
+  /// the same directory path serialize cleanly.
+  static final Map<String, Future<void>> _directoryLocks =
+      <String, Future<void>>{};
+
+  Future<T> _withDirectoryLock<T>(Future<T> Function() action) {
+    final Future<void> previous =
+        _directoryLocks[_directoryPath] ?? Future<void>.value();
+    final Completer<void> completer = Completer<void>();
+    _directoryLocks[_directoryPath] = completer.future;
+
+    return previous.then((_) => action()).whenComplete(() {
+      completer.complete();
+      if (identical(_directoryLocks[_directoryPath], completer.future)) {
+        _directoryLocks.remove(_directoryPath);
+      }
+    });
+  }
 
   static String _resolveDefaultDirectoryPath() {
     final String? appData = Platform.environment['APPDATA'] ??
@@ -35,73 +60,145 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
     return '${Directory.systemTemp.path}${Platform.pathSeparator}dart_up_telemetry_cache';
   }
 
-  File get _queueFile =>
-      File('$_directoryPath${Platform.pathSeparator}pending_telemetry_queue.json');
+  static String _sanitizeMatchId(String matchId) {
+    final bytes = utf8.encode(matchId);
+    return base64Url.encode(bytes).replaceAll('=', '');
+  }
+
+  File _recordFileForMatch(String matchId) {
+    final String safeName = _sanitizeMatchId(matchId);
+    return File(
+      '$_directoryPath${Platform.pathSeparator}recap_$safeName.json',
+    );
+  }
+
+  File get _legacyQueueFile => File(
+        '$_directoryPath${Platform.pathSeparator}pending_telemetry_queue.json',
+      );
 
   @override
-  Future<void> savePendingRecord(CachedTelemetryRecord record) async {
-    final Map<String, CachedTelemetryRecord> map = await _readMap();
-    map[record.matchId] = record;
-    await _writeMap(map);
+  Future<bool> savePendingRecord(CachedTelemetryRecord record) {
+    return _withDirectoryLock<bool>(() async {
+      try {
+        final dir = Directory(_directoryPath);
+        if (!await dir.exists()) {
+          await dir.create(recursive: true);
+        }
+        final File targetFile = _recordFileForMatch(record.matchId);
+        final File tempFile = File('${targetFile.path}.tmp');
+        await tempFile.writeAsString(
+          jsonEncode(record.toJson()),
+          flush: true,
+        );
+        await tempFile.rename(targetFile.path);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    });
   }
 
   @override
-  Future<List<CachedTelemetryRecord>> loadPendingRecords() async {
-    final Map<String, CachedTelemetryRecord> map = await _readMap();
-    final List<CachedTelemetryRecord> list = map.values.toList()
-      ..sort((a, b) => a.queuedAt.compareTo(b.queuedAt));
-    return list;
-  }
-
-  @override
-  Future<void> removePendingRecord(String matchId) async {
-    final Map<String, CachedTelemetryRecord> map = await _readMap();
-    if (map.remove(matchId) != null) {
-      await _writeMap(map);
-    }
-  }
-
-  @override
-  Future<void> clearAll() async {
-    final file = _queueFile;
-    if (await file.exists()) {
-      await file.delete();
-    }
-  }
-
-  Future<Map<String, CachedTelemetryRecord>> _readMap() async {
-    final file = _queueFile;
-    if (!await file.exists()) {
-      return <String, CachedTelemetryRecord>{};
-    }
-    try {
-      final String raw = await file.readAsString();
-      if (raw.trim().isEmpty) return <String, CachedTelemetryRecord>{};
-      final dynamic decoded = jsonDecode(raw);
-      if (decoded is! List) return <String, CachedTelemetryRecord>{};
-      final Map<String, CachedTelemetryRecord> result =
+  Future<List<CachedTelemetryRecord>> loadPendingRecords() {
+    return _withDirectoryLock<List<CachedTelemetryRecord>>(() async {
+      final Map<String, CachedTelemetryRecord> records =
           <String, CachedTelemetryRecord>{};
-      for (final item in decoded) {
-        if (item is Map<String, dynamic>) {
-          final rec = CachedTelemetryRecord.fromJson(item);
-          if (rec.matchId.isNotEmpty) {
-            result[rec.matchId] = rec;
+
+      // 1. Read legacy shared file if present
+      final legacy = _legacyQueueFile;
+      if (await legacy.exists()) {
+        try {
+          final String raw = await legacy.readAsString();
+          if (raw.trim().isNotEmpty) {
+            final dynamic decoded = jsonDecode(raw);
+            if (decoded is List) {
+              for (final item in decoded) {
+                if (item is Map<String, dynamic>) {
+                  final rec = CachedTelemetryRecord.fromJson(item);
+                  if (rec.matchId.isNotEmpty) {
+                    records[rec.matchId] = rec;
+                  }
+                }
+              }
+            }
+          }
+        } catch (_) {}
+      }
+
+      // 2. Read per-match atomic files (`recap_*.json`)
+      final dir = Directory(_directoryPath);
+      if (await dir.exists()) {
+        await for (final entity in dir.list(followLinks: false)) {
+          if (entity is File &&
+              entity.path.endsWith('.json') &&
+              !entity.path.endsWith('pending_telemetry_queue.json')) {
+            try {
+              final String raw = await entity.readAsString();
+              if (raw.trim().isEmpty) continue;
+              final dynamic decoded = jsonDecode(raw);
+              if (decoded is Map<String, dynamic>) {
+                final rec = CachedTelemetryRecord.fromJson(decoded);
+                if (rec.matchId.isNotEmpty) {
+                  records[rec.matchId] = rec;
+                }
+              }
+            } catch (_) {}
           }
         }
       }
-      return result;
-    } catch (_) {
-      return <String, CachedTelemetryRecord>{};
-    }
+
+      final List<CachedTelemetryRecord> list = records.values.toList()
+        ..sort((a, b) => a.queuedAt.compareTo(b.queuedAt));
+      return list;
+    });
   }
 
-  Future<void> _writeMap(Map<String, CachedTelemetryRecord> map) async {
-    final dir = Directory(_directoryPath);
-    if (!await dir.exists()) {
-      await dir.create(recursive: true);
-    }
-    final List<Map<String, Object?>> serialized =
-        map.values.map((e) => e.toJson()).toList();
-    await _queueFile.writeAsString(jsonEncode(serialized), flush: true);
+  @override
+  Future<void> removePendingRecord(String matchId) {
+    return _withDirectoryLock<void>(() async {
+      final File targetFile = _recordFileForMatch(matchId);
+      if (await targetFile.exists()) {
+        try {
+          await targetFile.delete();
+        } catch (_) {}
+      }
+
+      // Also clean from legacy file if present
+      final legacy = _legacyQueueFile;
+      if (await legacy.exists()) {
+        try {
+          final String raw = await legacy.readAsString();
+          final dynamic decoded = jsonDecode(raw);
+          if (decoded is List) {
+            final filtered = decoded
+                .where((item) =>
+                    item is Map<String, dynamic> &&
+                    item['match_id']?.toString() != matchId)
+                .toList();
+            if (filtered.isEmpty) {
+              await legacy.delete();
+            } else {
+              await legacy.writeAsString(jsonEncode(filtered), flush: true);
+            }
+          }
+        } catch (_) {}
+      }
+    });
+  }
+
+  @override
+  Future<void> clearAll() {
+    return _withDirectoryLock<void>(() async {
+      final dir = Directory(_directoryPath);
+      if (!await dir.exists()) return;
+      await for (final entity in dir.list(followLinks: false)) {
+        if (entity is File &&
+            (entity.path.endsWith('.json') || entity.path.endsWith('.tmp'))) {
+          try {
+            await entity.delete();
+          } catch (_) {}
+        }
+      }
+    });
   }
 }

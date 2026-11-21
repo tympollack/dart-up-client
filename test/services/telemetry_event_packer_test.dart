@@ -328,6 +328,101 @@ void main() {
       final lzCompressed = web_lz.lzEncode(raw);
       final lzDecompressed = web_lz.lzDecode(lzCompressed);
       expect(lzDecompressed, equals(raw));
+
+      // Verify web pureDartZlibInflate decompresses native dart:io zlib.encode bytes
+      final nativeZlibCompressed = Uint8List.fromList(zlib.encode(raw));
+      final webInflated = web_lz.pureDartZlibInflate(nativeZlibCompressed);
+      expect(webInflated, equals(raw));
+    });
+
+    test('Concurrent NativeDiskTelemetryOfflineStore save and remove across instances never lose recaps', () async {
+      final tempDir = await Directory.systemTemp.createTemp('dartup_concurrent_store_');
+      addTearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      final store1 = NativeDiskTelemetryOfflineStore(directoryPath: tempDir.path);
+      final store2 = NativeDiskTelemetryOfflineStore(directoryPath: tempDir.path);
+
+      final recA = CachedTelemetryRecord(
+        matchId: 'match_A',
+        packedPayload: Uint8List.fromList(<int>[1, 2, 3]),
+        queuedAt: DateTime.utc(2026, 11, 21, 10, 0),
+      );
+      final recB = CachedTelemetryRecord(
+        matchId: 'match_B',
+        packedPayload: Uint8List.fromList(<int>[4, 5, 6]),
+        queuedAt: DateTime.utc(2026, 11, 21, 10, 1),
+      );
+
+      await store1.savePendingRecord(recA);
+
+      // Run concurrent removal of A on store1 and insertion of B on store2
+      await Future.wait(<Future<Object?>>[
+        store1.removePendingRecord('match_A'),
+        store2.savePendingRecord(recB),
+      ]);
+
+      final remaining = await store1.loadPendingRecords();
+      expect(remaining.map((r) => r.matchId).toList(), equals(<String>['match_B']));
+    });
+
+    test('TelemetryDispatchHook reports cachedOffline=false and savedInMemoryOnly=true when durable storage write fails', () async {
+      final mockClient = MockClient((http.Request _) async {
+        throw const SocketException('Offline');
+      });
+      final failingStore = InMemoryTelemetryOfflineStore(
+        simulateDurableWriteFailure: true,
+      );
+      final hook = TelemetryDispatchHook(
+        baseUrl: 'https://hub-stag.sunshade.icu',
+        httpClient: mockClient,
+        offlineStore: failingStore,
+      );
+
+      final res = await hook.dispatchPackedTelemetry(
+        matchId: 'match_unpersisted',
+        packedPayload: Uint8List.fromList(<int>[1, 2, 3, 4]),
+      );
+      expect(res.uploaded, isFalse);
+      expect(res.cachedOffline, isFalse);
+      expect(res.savedInMemoryOnly, isTrue);
+    });
+
+    test('StarDartMVP records constant ship velocity across uneven 30 FPS 1- and 2-frame sampling intervals and records turret combat events', () async {
+      final mvpGame = StarDartMVP(
+        matchId: 'mvp_30fps_test',
+        enableRealtimePolling: false,
+        telemetryDispatchHook: TelemetryDispatchHook(
+          offlineStore: InMemoryTelemetryOfflineStore(),
+        ),
+      );
+      mvpGame.onGameResize(Vector2(1280, 720));
+      await mvpGame.onLoad();
+      mvpGame.onMount();
+
+      // Command ship to move right at constant 300 units/s
+      mvpGame.playerShip.setTarget(Vector2(5000, 0));
+
+      // Step at 30 FPS (dt = 1/30 = 0.033333s) for 10 frames (~0.33s)
+      const double dt30 = 1.0 / 30.0;
+      for (int f = 0; f < 10; f++) {
+        mvpGame.update(dt30);
+      }
+
+      expect(mvpGame.telemetryRingBuffer.length, greaterThanOrEqualTo(5));
+      final cursor = TelemetryEntityCursor();
+      for (int i = 0; i < mvpGame.telemetryRingBuffer.length; i++) {
+        mvpGame.telemetryRingBuffer.readEntityAt(
+          chronologicalTickIndex: i,
+          entitySlot: 0,
+          outCursor: cursor,
+        );
+        // Every sample after movement starts must report steady ~300 units/s speed
+        expect(cursor.vx, closeTo(300.0, 2.0));
+      }
     });
   });
 }

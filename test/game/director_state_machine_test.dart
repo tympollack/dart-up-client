@@ -241,5 +241,41 @@ void main() {
       expect(frame.cameraX, closeTo(frame.framingBox.centerX, 1e-6));
       expect(frame.cameraY, closeTo(frame.framingBox.centerY, 1e-6));
     });
+
+    test('Opening frame with a critical_climax event locks onto the climax target and engages slow-motion timeScale immediately', () {
+      final director = DirectorStateMachine();
+      final openingFrame = director.evaluateFrame(
+        dt: 0.05,
+        timestamp: 0.0,
+        entities: const [
+          DirectorEntityTarget(
+            entityId: 1,
+            x: 0.0,
+            y: 0.0,
+            vx: 20.0,
+            vy: 0.0,
+            hull: 90.0,
+            recentCombatDamage: 80.0,
+          ),
+          DirectorEntityTarget(
+            entityId: 2,
+            x: 400.0,
+            y: -300.0,
+            vx: 10.0,
+            vy: 10.0,
+            hull: 5.0, // < 10% hull critical save on frame 0
+            maxHull: 100.0,
+          ),
+        ],
+      );
+
+      expect(openingFrame.primaryEntityId, equals(2));
+      expect(
+        openingFrame.mode,
+        equals(DirectorCameraMode.criticalClimaxCloseUp),
+      );
+      expect(openingFrame.timeScale, lessThan(1.0));
+      expect(director.cutHistory.first.isCriticalClimaxOverride, isTrue);
+    });
   });
 }

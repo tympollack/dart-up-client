@@ -25,6 +25,7 @@ class TelemetryDispatchResult {
   final String matchId;
   final bool uploaded;
   final bool cachedOffline;
+  final bool savedInMemoryOnly;
   final int payloadSizeBytes;
   final int statusCode;
   final String? error;
@@ -33,6 +34,7 @@ class TelemetryDispatchResult {
     required this.matchId,
     required this.uploaded,
     required this.cachedOffline,
+    this.savedInMemoryOnly = false,
     required this.payloadSizeBytes,
     this.statusCode = 0,
     this.error,
@@ -148,7 +150,7 @@ class TelemetryDispatchHook {
       '[TelemetryDispatchHook] Upload failed for $matchId ($errorMsg). Caching offline.',
     );
 
-    await _offlineStore.savePendingRecord(
+    final bool durableSave = await _offlineStore.savePendingRecord(
       CachedTelemetryRecord(
         matchId: matchId,
         packedPayload: packedPayload,
@@ -160,7 +162,8 @@ class TelemetryDispatchHook {
     return TelemetryDispatchResult(
       matchId: matchId,
       uploaded: false,
-      cachedOffline: true,
+      cachedOffline: durableSave,
+      savedInMemoryOnly: !durableSave,
       payloadSizeBytes: packedPayload.length,
       statusCode: statusCode,
       error: errorMsg,
