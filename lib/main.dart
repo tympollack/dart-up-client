@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flame/game.dart';
 import 'package:sd_client/core/main_mvp.dart';
 import 'package:sd_client/hub/hub_client.dart';
 import 'package:sd_client/hub/auth_entry_gate.dart';
 import 'package:sd_client/services/sso_auth_service.dart';
+import 'package:sd_client/services/telemetry/telemetry_dispatch_hook.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -17,6 +19,13 @@ void main() async {
   // 3. Inspect document.cookie via package:web for active .sunshade.icu session
   final authService = SsoAuthService();
   await authService.hydrateFromCookie();
+
+  // 4. Flush any pending offline-cached telemetry recaps on app launch
+  final startupTelemetryHook = TelemetryDispatchHook(
+    baseUrl: HubClient.sharedService.baseUrl,
+    accessTokenProvider: () => HubClient.sharedService.accessToken,
+  );
+  unawaited(startupTelemetryHook.flushPendingQueue());
 
   runApp(
     MaterialApp(
