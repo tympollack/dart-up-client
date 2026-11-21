@@ -36,7 +36,9 @@ import 'package:sd_client/player/hacking_ui_component.dart';
 import 'package:sd_client/player/player_ship_component.dart';
 import 'package:sd_client/player/ship_warp_controller.dart';
 import 'package:sd_client/services/gladiator_and_cosmetics_service.dart';
+import 'package:sd_client/services/telemetry/telemetry_dispatch_hook.dart';
 import 'package:sd_client/simulation/swarm/swarm_simulation.dart';
+import 'package:sd_client/simulation/telemetry/telemetry_ring_buffer.dart';
 import 'package:sd_client/swarm/swarm_isolate.dart';
 import 'package:sd_client/swarm/swarm_render_component.dart';
 
@@ -45,6 +47,8 @@ class DartUpGame extends FlameGame with TapCallbacks {
     String? matchId,
     HubApiService? hubApiService,
     GladiatorMatchListener? gladiatorListener,
+    TelemetryRingBuffer? telemetryRingBuffer,
+    TelemetryDispatchHook? telemetryDispatchHook,
     bool? enableSwarmIsolate,
     bool spawnIsolateOnLoad = true,
     this.customAtlasImage,
@@ -52,11 +56,15 @@ class DartUpGame extends FlameGame with TapCallbacks {
   })  : matchId = matchId ?? HubClient.generateMatchId(),
         _injectedHubApiService = hubApiService,
         _injectedGladiatorListener = gladiatorListener,
+        _injectedTelemetryRingBuffer = telemetryRingBuffer,
+        _injectedTelemetryDispatchHook = telemetryDispatchHook,
         spawnIsolateOnLoad = enableSwarmIsolate ?? spawnIsolateOnLoad;
 
   final String matchId;
   final HubApiService? _injectedHubApiService;
   final GladiatorMatchListener? _injectedGladiatorListener;
+  final TelemetryRingBuffer? _injectedTelemetryRingBuffer;
+  final TelemetryDispatchHook? _injectedTelemetryDispatchHook;
 
   /// Whether to spawn the background swarm isolate during [onLoad].
   /// Defaults to `true` in production; can be set to `false` in headless widget/unit tests.
@@ -86,9 +94,14 @@ class DartUpGame extends FlameGame with TapCallbacks {
   // ---- Ecosystem & Gladiator Services ----
   late final HubApiService hubApiService;
   late final GladiatorMatchListener gladiatorListener;
+  late final TelemetryRingBuffer telemetryRingBuffer;
+  late final TelemetryDispatchHook telemetryDispatchHook;
   int _totalDronesHacked = 0;
   int _engagedSquadCount = 0;
   final Set<String> _matchUnlockedFeatIds = {};
+  double _prevSampledPlayerX = 0.0;
+  double _prevSampledPlayerY = 0.0;
+  bool _hasSampledInitialPlayerPosition = false;
 
   // ---- Components ----
   late final PlayerShipComponent shipComponent;
@@ -113,6 +126,14 @@ class DartUpGame extends FlameGame with TapCallbacks {
     if (!hubApiService.isAuthenticated) {
       hubApiService.authenticateFromUrl(Uri.base);
     }
+
+    telemetryRingBuffer = _injectedTelemetryRingBuffer ?? TelemetryRingBuffer();
+    telemetryDispatchHook = _injectedTelemetryDispatchHook ??
+        TelemetryDispatchHook(
+          baseUrl: hubApiService.baseUrl,
+          accessTokenProvider: () => hubApiService.accessToken,
+        );
+    unawaited(telemetryDispatchHook.flushPendingQueue());
 
     economy = DroneSwarmEconomy(maxFleetSize: 350, startingFleetSize: 300);
     fighterRoster = FighterRoster(maxFighterCount: 24);
@@ -140,6 +161,17 @@ class DartUpGame extends FlameGame with TapCallbacks {
         shipComponent.setBasePosition(
           Vector2(result.arrival.x, result.arrival.y),
         );
+        if (telemetryRingBuffer.currentRingSlot >= 0) {
+          telemetryRingBuffer.recordWarpWakeEmission(
+            shipEntityId: 1,
+            originX: result.wake.x,
+            originY: result.wake.y,
+            targetX: result.arrival.x,
+            targetY: result.arrival.y,
+            energySignature: result.wake.baseEnergySignature,
+            driveTypeCode: result.wake.driveType == WarpDriveType.ftl ? 1 : 0,
+          );
+        }
         // result.dronesStranded / result.fightersStranded.{rendezvousCount,
         // scrambleCount, lastStandCount} / result.wake -- hook your
         // warp-completed VFX/SFX here. Arriving (the 2s deceleration
@@ -169,6 +201,9 @@ class DartUpGame extends FlameGame with TapCallbacks {
       size: Vector2(48, 48),
       position: size / 2, // screen center -- adjust to your layout
     );
+    _prevSampledPlayerX = shipComponent.basePosition.x;
+    _prevSampledPlayerY = shipComponent.basePosition.y;
+    _hasSampledInitialPlayerPosition = true;
 
     // ---- Celestial nodes ----------------------------------------------
     nodeManager = CelestialNodeManager();
@@ -251,7 +286,20 @@ class DartUpGame extends FlameGame with TapCallbacks {
       economy: economy,
       enemyFighterRoster: enemyFighterRoster,
       playerShipController: shipWarpController,
-      onDamageDealt: combatVFXComponent.recordHit,
+      onDamageDealt: (event) {
+        combatVFXComponent.recordHit(event);
+        if (telemetryRingBuffer.currentRingSlot >= 0) {
+          telemetryRingBuffer.recordWeaponEvent(
+            attackerId: event.source == CombatHitSource.enemyFighterOnShip ? 2 : 1,
+            targetId: event.source == CombatHitSource.enemyFighterOnShip ? 1 : 2,
+            sourceX: event.sourceX,
+            sourceY: event.sourceY,
+            targetX: event.targetX,
+            targetY: event.targetY,
+            damage: event.damage,
+          );
+        }
+      },
     );
 
     // Adjust the asset path and source rect to your actual atlas layout.
@@ -324,7 +372,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
       );
     }
 
-    return hubApiService.submitMatchResult(
+    final result = await hubApiService.submitMatchResult(
       MatchSummary(
         matchId: matchId,
         opponentName: opponentName,
@@ -336,6 +384,13 @@ class DartUpGame extends FlameGame with TapCallbacks {
         featsUnlocked: _matchUnlockedFeatIds.toList(),
       ),
     );
+    unawaited(
+      telemetryDispatchHook.dispatchMatchTelemetry(
+        matchId: matchId,
+        ringBuffer: telemetryRingBuffer,
+      ),
+    );
+    return result;
   }
 
   Future<void> _spawnSwarmIsolate() async {
@@ -401,6 +456,31 @@ class DartUpGame extends FlameGame with TapCallbacks {
     // rather than sitting idle for one extra tick.
     enemyDirector.update(dt, playerX: playerX, playerY: playerY);
     combatManager.update(dt, playerX: playerX, playerY: playerY);
+
+    if (telemetryRingBuffer.advanceSampleClock(dt)) {
+      final double interval = telemetryRingBuffer.sampleIntervalSeconds;
+      final double vx = _hasSampledInitialPlayerPosition
+          ? (playerX - _prevSampledPlayerX) / interval
+          : 0.0;
+      final double vy = _hasSampledInitialPlayerPosition
+          ? (playerY - _prevSampledPlayerY) / interval
+          : 0.0;
+      _prevSampledPlayerX = playerX;
+      _prevSampledPlayerY = playerY;
+      _hasSampledInitialPlayerPosition = true;
+
+      telemetryRingBuffer.beginTick(
+        timestamp: shipWarpController.simulationTime,
+      );
+      telemetryRingBuffer.recordEntityState(
+        entityId: 1,
+        x: playerX,
+        y: playerY,
+        vx: vx,
+        vy: vy,
+        hull: shipWarpController.shipEnergy,
+      );
+    }
 
     _swarmCommandPort?.send(SwarmTickMessage(dt));
   }
