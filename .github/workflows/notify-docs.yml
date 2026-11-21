@@ -1,0 +1,20 @@
+name: Notify Central Docs Portal
+on:
+  push:
+    branches: [main, staging]
+    paths:
+      - 'docs/**'
+      - 'README.md'
+      - 'ARCHITECTURE.md'
+      - 'CONTRIBUTING.md'
+
+jobs:
+  dispatch-docs-rebuild:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger sunshade-docs rebuild
+        run: |
+          curl -X POST "https://api.github.com/repos/tympollack/sunshade-docs/dispatches" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${{ secrets.DOCS_DISPATCH_TOKEN }}" \
+            -d '{"event_type":"docs-updated","client_payload":{"repo":"${{ github.event.repository.name }}","ref":"${{ github.ref_name }}"}}'
