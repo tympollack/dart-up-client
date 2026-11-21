@@ -70,6 +70,7 @@ class SsoAuthService {
   final CookieReader cookieReader;
   final SupabaseClient? _customSupabaseClient;
   static bool _supabaseInitialized = false;
+  static String? _initializedSupabaseUrl;
   static StreamSubscription<AuthState>? _authSubscription;
 
   SupabaseClient? get _supabaseClient {
@@ -103,6 +104,7 @@ class SsoAuthService {
 
     final resolvedUrl = url ?? AppConfig.supabaseUrl;
     final resolvedAnonKey = anonKey ?? AppConfig.supabaseAnonKey;
+    _initializedSupabaseUrl = resolvedUrl;
 
     if (resolvedUrl.isNotEmpty && resolvedAnonKey.isNotEmpty) {
       try {
@@ -141,11 +143,27 @@ class SsoAuthService {
     }
   }
 
-  /// Supabase project ref (first host label) of [AppConfig.supabaseUrl].
-  static String? get configuredProjectRef {
-    final host = Uri.tryParse(AppConfig.supabaseUrl)?.host ?? '';
+  /// Extracts the Supabase project ref (first host label) from a Supabase URL.
+  static String? projectRefFromUrl(String? url) {
+    if (url == null || url.trim().isEmpty) return null;
+    final host = Uri.tryParse(url.trim())?.host ?? '';
     final ref = host.split('.').first;
     return ref.isEmpty ? null : ref;
+  }
+
+  /// Supabase project ref (first host label) of the active/configured Supabase URL.
+  static String? get configuredProjectRef =>
+      projectRefFromUrl(_initializedSupabaseUrl ?? AppConfig.supabaseUrl);
+
+  /// Active project ref for this [SsoAuthService] instance (prefers injected
+  /// [SupabaseClient] rest/auth URL override, falling back to [configuredProjectRef]).
+  String? get activeProjectRef {
+    final client = _supabaseClient;
+    if (client != null) {
+      final ref = projectRefFromUrl(client.rest.url);
+      if (ref != null && ref.isNotEmpty) return ref;
+    }
+    return configuredProjectRef;
   }
 
   /// Extracts session credentials from cookie header strings.
@@ -341,7 +359,7 @@ class SsoAuthService {
   /// and hydrates Supabase and HubClient.sharedService.
   Future<bool> hydrateFromCookie() async {
     final cookieStr = cookieReader.getCookieString();
-    final session = parseCookieSession(cookieStr, projectRef: configuredProjectRef);
+    final session = parseCookieSession(cookieStr, projectRef: activeProjectRef);
 
     if (session == null || session.accessToken.isEmpty) {
       return false;
