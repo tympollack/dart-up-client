@@ -100,6 +100,73 @@ void main() {
       expect(str, isNot(contains('SUPER_SECRET_REFRESH_TOKEN')));
     });
 
+    test('Ignores sb-*-auth-token cookies from other Supabase projects when projectRef is given', () {
+      String enc(String access, String refresh) =>
+          'base64-${base64Url.encode(utf8.encode(jsonEncode({'access_token': access, 'refresh_token': refresh}))).replaceAll('=', '')}';
+      // Foreign project's cookie is listed FIRST.
+      final cookie = 'sb-otherproject-auth-token=${enc('foreign_access', 'foreign_refresh')}; '
+          'sb-rweehbzsflhhtwjrjnvy-auth-token=${enc('mine_access', 'mine_refresh')}';
+
+      final scoped = SsoAuthService.parseCookieSession(cookie, projectRef: 'rweehbzsflhhtwjrjnvy');
+      expect(scoped?.accessToken, equals('mine_access'));
+      expect(scoped?.refreshToken, equals('mine_refresh'));
+
+      final onlyForeign = 'sb-otherproject-auth-token=${enc('foreign_access', 'foreign_refresh')}';
+      expect(SsoAuthService.parseCookieSession(onlyForeign, projectRef: 'rweehbzsflhhtwjrjnvy'), isNull);
+    });
+
+    test('hydrateFromCookie scopes chunked cookies to activeProjectRef (including client URL overrides) and ignores foreign chunks', () async {
+      String makePayload(String access, String refresh, String uid) =>
+          jsonEncode({
+            'access_token': access,
+            'refresh_token': refresh,
+            'user': {'id': uid},
+          });
+
+      final foreignJson = makePayload('foreign_chunk_access', 'foreign_chunk_refresh', 'foreign_user');
+      final foreignHalf = foreignJson.length ~/ 2;
+
+      final mineJson = makePayload('mine_chunk_access', 'mine_chunk_refresh', 'mine_user_1');
+      final mineHalf = mineJson.length ~/ 2;
+
+      final overrideJson = makePayload('override_chunk_access', '', 'override_user_2');
+      final overrideHalf = overrideJson.length ~/ 2;
+
+      final cookieStr =
+          'sb-foreignproj-auth-token.0=${Uri.encodeComponent(foreignJson.substring(0, foreignHalf))}; '
+          'sb-foreignproj-auth-token.1=${Uri.encodeComponent(foreignJson.substring(foreignHalf))}; '
+          'sb-rweehbzsflhhtwjrjnvy-auth-token.0=${Uri.encodeComponent(mineJson.substring(0, mineHalf))}; '
+          'sb-rweehbzsflhhtwjrjnvy-auth-token.1=${Uri.encodeComponent(mineJson.substring(mineHalf))}; '
+          'sb-customoverride-auth-token.0=${Uri.encodeComponent(overrideJson.substring(0, overrideHalf))}; '
+          'sb-customoverride-auth-token.1=${Uri.encodeComponent(overrideJson.substring(overrideHalf))}';
+
+      final stubReader = StubCookieReader()..stubCookie = cookieStr;
+
+      // 1. Default configuredProjectRef ('rweehbzsflhhtwjrjnvy') selects mine_chunk_access
+      final defaultService = SsoAuthService(reader: stubReader);
+      expect(defaultService.activeProjectRef, equals('rweehbzsflhhtwjrjnvy'));
+      final hydratedDefault = await defaultService.hydrateFromCookie();
+      expect(hydratedDefault, isTrue);
+      expect(HubClient.sharedService.accessToken, equals('mine_chunk_access'));
+      expect(HubClient.sharedService.userId, equals('mine_user_1'));
+
+      // 2. Client override URL ('https://customoverride.supabase.co') scopes to 'customoverride'
+      final customClient = SupabaseClient(
+        'https://customoverride.supabase.co',
+        'dummy_anon_key',
+        authOptions: const AuthClientOptions(autoRefreshToken: false),
+      );
+      final overrideService = SsoAuthService(
+        reader: stubReader,
+        supabaseClient: customClient,
+      );
+      expect(overrideService.activeProjectRef, equals('customoverride'));
+      final hydratedOverride = await overrideService.hydrateFromCookie();
+      expect(hydratedOverride, isTrue);
+      expect(HubClient.sharedService.accessToken, equals('override_chunk_access'));
+      customClient.dispose();
+    });
+
     test('SsoAuthService.hydrateFromCookie hydrates HubClient session', () async {
       final stubReader = StubCookieReader();
       stubReader.stubCookie = 'sb-access-token=hydrate_test_token; user_id=test_user_77';
