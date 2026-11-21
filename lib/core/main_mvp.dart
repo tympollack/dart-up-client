@@ -61,7 +61,10 @@ class StarDartMVP extends FlameGame with TapCallbacks {
   double _simulationTime = 0.0;
   double _prevSampledShipX = 0.0;
   double _prevSampledShipY = 0.0;
+  double _prevSampledShipTime = 0.0;
   bool _hasSampledInitialShipPosition = false;
+  final Map<int, ({double x, double y})> _prevSquadPositions =
+      <int, ({double x, double y})>{};
   late Ship playerShip;
   late SwarmManager droneSwarm; // NEW: The Swarm!
   late TacticalRTSComponent tacticalRTS; // NEW: Kenney RTS Tactical Subsystem!
@@ -104,6 +107,7 @@ class StarDartMVP extends FlameGame with TapCallbacks {
       ..anchor = Anchor.center;
     _prevSampledShipX = playerShip.position.x;
     _prevSampledShipY = playerShip.position.y;
+    _prevSampledShipTime = _simulationTime;
     _hasSampledInitialShipPosition = true;
     gameWorld.add(playerShip);
 
@@ -133,17 +137,21 @@ class StarDartMVP extends FlameGame with TapCallbacks {
     droneSwarm.setTarget(playerShip.position);
 
     if (telemetryRingBuffer.advanceSampleClock(dt)) {
-      final double interval = telemetryRingBuffer.sampleIntervalSeconds;
+      final double elapsedSampleDt = _simulationTime - _prevSampledShipTime;
+      final double divisor = elapsedSampleDt > 1e-6
+          ? elapsedSampleDt
+          : telemetryRingBuffer.sampleIntervalSeconds;
       final double shipX = playerShip.position.x;
       final double shipY = playerShip.position.y;
       final double vx = _hasSampledInitialShipPosition
-          ? (shipX - _prevSampledShipX) / interval
+          ? (shipX - _prevSampledShipX) / divisor
           : 0.0;
       final double vy = _hasSampledInitialShipPosition
-          ? (shipY - _prevSampledShipY) / interval
+          ? (shipY - _prevSampledShipY) / divisor
           : 0.0;
       _prevSampledShipX = shipX;
       _prevSampledShipY = shipY;
+      _prevSampledShipTime = _simulationTime;
       _hasSampledInitialShipPosition = true;
 
       telemetryRingBuffer.beginTick(timestamp: _simulationTime);
@@ -153,8 +161,32 @@ class StarDartMVP extends FlameGame with TapCallbacks {
         y: shipY,
         vx: vx,
         vy: vy,
-        hull: 100.0,
+        hull: playerShip.hull,
       );
+
+      // Record tactical RTS squad units in world coordinate space
+      for (int i = 0; i < tacticalRTS.squadUnits.length; i++) {
+        final unit = tacticalRTS.squadUnits[i];
+        final int unitEntityId = i + 2;
+        final Vector2 worldPos = tacticalRTS.positionOf(unit.position);
+        final prevPos = _prevSquadPositions[unitEntityId];
+        final double uVx =
+            prevPos != null ? (worldPos.x - prevPos.x) / divisor : 0.0;
+        final double uVy =
+            prevPos != null ? (worldPos.y - prevPos.y) / divisor : 0.0;
+        _prevSquadPositions[unitEntityId] = (
+          x: worldPos.x,
+          y: worldPos.y,
+        );
+        telemetryRingBuffer.recordEntityState(
+          entityId: unitEntityId,
+          x: worldPos.x,
+          y: worldPos.y,
+          vx: uVx,
+          vy: uVy,
+          hull: 100.0,
+        );
+      }
     }
   }
 
@@ -236,6 +268,7 @@ class Starfield extends Component {
 class Ship extends PositionComponent {
   Vector2? targetPosition;
   final double speed = 300.0; 
+  double hull = 100.0;
   double _particleTimer = 0.0;
 
   @override

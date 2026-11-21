@@ -101,6 +101,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
   final Set<String> _matchUnlockedFeatIds = {};
   double _prevSampledPlayerX = 0.0;
   double _prevSampledPlayerY = 0.0;
+  double _prevSampledPlayerTime = 0.0;
   bool _hasSampledInitialPlayerPosition = false;
 
   // ---- Components ----
@@ -203,6 +204,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
     );
     _prevSampledPlayerX = shipComponent.basePosition.x;
     _prevSampledPlayerY = shipComponent.basePosition.y;
+    _prevSampledPlayerTime = shipWarpController.simulationTime;
     _hasSampledInitialPlayerPosition = true;
 
     // ---- Celestial nodes ----------------------------------------------
@@ -458,19 +460,25 @@ class DartUpGame extends FlameGame with TapCallbacks {
     combatManager.update(dt, playerX: playerX, playerY: playerY);
 
     if (telemetryRingBuffer.advanceSampleClock(dt)) {
-      final double interval = telemetryRingBuffer.sampleIntervalSeconds;
+      final double currentSimTime = shipWarpController.simulationTime;
+      final double elapsedSampleDt =
+          currentSimTime - _prevSampledPlayerTime;
+      final double divisor = elapsedSampleDt > 1e-6
+          ? elapsedSampleDt
+          : telemetryRingBuffer.sampleIntervalSeconds;
       final double vx = _hasSampledInitialPlayerPosition
-          ? (playerX - _prevSampledPlayerX) / interval
+          ? (playerX - _prevSampledPlayerX) / divisor
           : 0.0;
       final double vy = _hasSampledInitialPlayerPosition
-          ? (playerY - _prevSampledPlayerY) / interval
+          ? (playerY - _prevSampledPlayerY) / divisor
           : 0.0;
       _prevSampledPlayerX = playerX;
       _prevSampledPlayerY = playerY;
+      _prevSampledPlayerTime = currentSimTime;
       _hasSampledInitialPlayerPosition = true;
 
       telemetryRingBuffer.beginTick(
-        timestamp: shipWarpController.simulationTime,
+        timestamp: currentSimTime,
       );
       telemetryRingBuffer.recordEntityState(
         entityId: 1,

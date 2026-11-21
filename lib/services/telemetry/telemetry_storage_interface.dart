@@ -58,7 +58,10 @@ class CachedTelemetryRecord {
 /// Offline persistence contract implemented by IndexedDB/Web Storage on web and
 /// application documents directory file storage on native/mobile.
 abstract class TelemetryOfflineStore {
-  Future<void> savePendingRecord(CachedTelemetryRecord record);
+  /// Persists [record] to durable storage (IndexedDB/localStorage on web, disk
+  /// on native). Returns `true` if the record was committed to durable storage
+  /// across app restarts, or `false` if only an in-memory fallback copy exists.
+  Future<bool> savePendingRecord(CachedTelemetryRecord record);
   Future<List<CachedTelemetryRecord>> loadPendingRecords();
   Future<void> removePendingRecord(String matchId);
   Future<void> clearAll();
@@ -66,12 +69,16 @@ abstract class TelemetryOfflineStore {
 
 /// In-memory fallback / test implementation of [TelemetryOfflineStore].
 class InMemoryTelemetryOfflineStore implements TelemetryOfflineStore {
+  InMemoryTelemetryOfflineStore({this.simulateDurableWriteFailure = false});
+
+  final bool simulateDurableWriteFailure;
   final Map<String, CachedTelemetryRecord> _records =
       <String, CachedTelemetryRecord>{};
 
   @override
-  Future<void> savePendingRecord(CachedTelemetryRecord record) async {
+  Future<bool> savePendingRecord(CachedTelemetryRecord record) async {
     _records[record.matchId] = record;
+    return !simulateDurableWriteFailure;
   }
 
   @override

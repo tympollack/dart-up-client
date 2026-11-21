@@ -231,6 +231,19 @@ void main() {
       final savedFile = File(exported.shareResult.savedFilePath!);
       expect(await savedFile.exists(), isTrue);
       expect(await savedFile.length(), equals(reel.mp4Bytes.length));
+
+      // Probe and decode the exported MP4 video track to verify dimensions,
+      // duration, sample table offsets, and decoded I_PCM luma planes
+      final probed = VerticalApexReelExporter.probeAndDecodeMp4VideoTrack(
+        reel.mp4Bytes,
+      );
+      expect(probed.width, equals(1080));
+      expect(probed.height, equals(1920));
+      expect(probed.sampleCount, equals(reel.frames.length));
+      expect(probed.durationSeconds, closeTo(reel.durationSeconds, 0.05));
+      expect(probed.videoSamples.first.first, equals(0x65)); // H.264 IDR slice
+      expect(probed.decodedLumaPlanes.length, equals(reel.frames.length));
+      expect(probed.decodedLumaPlanes.first[8 * 16 + 8], equals(235)); // Player ship center luma core
     });
   });
 }

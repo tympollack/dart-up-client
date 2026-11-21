@@ -350,23 +350,46 @@ class DirectorStateMachine {
         hadInitialLock ? (timestamp - _lastCutTimestamp) : double.infinity;
 
     // 3. Enforce 4.0s anti-whip guard unless critical_climax fires or initial lock
-    if (!_hasInitialLock) {
+    if (!hadInitialLock) {
       _hasInitialLock = true;
-      _primaryEntityId = bestCandidate.primary.entityId;
-      _secondaryEntityId = bestCandidate.secondary?.entityId;
-      _mode = bestCandidate.candidateMode;
-      _lastCutTimestamp = timestamp;
-      _cutHistory.add(
-        DirectorCutEvent(
-          timestamp: timestamp,
-          previousPrimaryEntityId: -1,
-          newPrimaryEntityId: _primaryEntityId,
-          shotHoldDurationSeconds: 0.0,
-          mode: _mode,
-          reason: DirectorCutReason.initialLock,
-          isCriticalClimaxOverride: false,
-        ),
-      );
+      if (climaxEntity != null && climaxReason != null) {
+        _primaryEntityId = climaxEntity.entityId;
+        _secondaryEntityId =
+            _findNearestNeighbor(entities, climaxEntity)?.entityId;
+        _mode =
+            climaxReason == DirectorCutReason.criticalClimaxStarDartCapture
+                ? DirectorCameraMode.starDartAmbush
+                : DirectorCameraMode.criticalClimaxCloseUp;
+        _climaxSlowMoRemaining = config.climaxSlowMotionDurationSeconds;
+        _lastCutTimestamp = timestamp;
+        _cutHistory.add(
+          DirectorCutEvent(
+            timestamp: timestamp,
+            previousPrimaryEntityId: -1,
+            newPrimaryEntityId: _primaryEntityId,
+            shotHoldDurationSeconds: 0.0,
+            mode: _mode,
+            reason: climaxReason,
+            isCriticalClimaxOverride: true,
+          ),
+        );
+      } else {
+        _primaryEntityId = bestCandidate.primary.entityId;
+        _secondaryEntityId = bestCandidate.secondary?.entityId;
+        _mode = bestCandidate.candidateMode;
+        _lastCutTimestamp = timestamp;
+        _cutHistory.add(
+          DirectorCutEvent(
+            timestamp: timestamp,
+            previousPrimaryEntityId: -1,
+            newPrimaryEntityId: _primaryEntityId,
+            shotHoldDurationSeconds: 0.0,
+            mode: _mode,
+            reason: DirectorCutReason.initialLock,
+            isCriticalClimaxOverride: false,
+          ),
+        );
+      }
     } else if (climaxEntity != null && climaxReason != null) {
       // Critical climax bypasses the 4.0s anti-whip cooldown immediately
       final int prevId = _primaryEntityId;

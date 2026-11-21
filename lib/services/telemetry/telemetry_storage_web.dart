@@ -1,7 +1,13 @@
 // =============================================================================
 // telemetry_storage_web.dart
 //
-// Web IndexedDB & localStorage persistence for failed telemetry uploads.
+// Web IndexedDB & per-match localStorage persistence for failed telemetry
+// uploads.
+//
+// Uses one localStorage key per match (`dart_up_pending_recap_v2_<matchId>`)
+// so concurrent flushes and End Match saves across separate store instances
+// never overwrite unrelated matches, and returns durable persistence status
+// (`true` only when IndexedDB or localStorage commits the write).
 // =============================================================================
 
 import 'dart:async';
@@ -18,15 +24,18 @@ TelemetryOfflineStore createPlatformTelemetryOfflineStore({
     WebIndexedDbTelemetryOfflineStore();
 
 /// Web offline telemetry cache backed by IndexedDB (`dart_up_telemetry_db` /
-/// `pending_recaps`) with synchronous mirror fallback to `window.localStorage`.
+/// `pending_recaps`) with per-match mirror fallback in `window.localStorage`.
 class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
   static const String _dbName = 'dart_up_telemetry_db';
   static const String _storeName = 'pending_recaps';
-  static const String _localStorageFallbackKey =
-      'dart_up_pending_telemetry_queue_v1';
+  static const String _perMatchKeyPrefix = 'dart_up_pending_recap_v2_';
+  static const String _legacyQueueKey = 'dart_up_pending_telemetry_queue_v1';
 
   final Map<String, CachedTelemetryRecord> _memoryMirror =
       <String, CachedTelemetryRecord>{};
+
+  static String _storageKeyForMatch(String matchId) =>
+      '$_perMatchKeyPrefix$matchId';
 
   Future<web.IDBDatabase?> _openDb() async {
     try {
@@ -58,37 +67,20 @@ class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
   }
 
   @override
-  Future<void> savePendingRecord(CachedTelemetryRecord record) async {
+  Future<bool> savePendingRecord(CachedTelemetryRecord record) async {
     _memoryMirror[record.matchId] = record;
-    _saveToLocalStorageMirror();
+    final String encoded = jsonEncode(record.toJson());
+    final bool savedToLocalStorage =
+        _saveRecordToLocalStorage(record.matchId, encoded);
+    final bool savedToIndexedDb =
+        await _saveRecordToIndexedDb(record.matchId, encoded);
 
-    final db = await _openDb();
-    if (db == null) return;
-    try {
-      final completer = Completer<void>();
-      final tx = db.transaction(_storeName.toJS, 'readwrite');
-      tx.oncomplete = ((web.Event _) {
-        if (!completer.isCompleted) completer.complete();
-      }).toJS;
-      tx.onerror = ((web.Event _) {
-        if (!completer.isCompleted) completer.complete();
-      }).toJS;
-      final store = tx.objectStore(_storeName);
-      store.put(jsonEncode(record.toJson()).toJS, record.matchId.toJS);
-      await completer.future.timeout(
-        const Duration(milliseconds: 500),
-        onTimeout: () {},
-      );
-    } catch (_) {
-      // Fallback mirror already saved
-    } finally {
-      db.close();
-    }
+    return savedToLocalStorage || savedToIndexedDb;
   }
 
   @override
   Future<List<CachedTelemetryRecord>> loadPendingRecords() async {
-    _hydrateFromLocalStorageMirror();
+    _hydrateFromLocalStorageKeys();
     await _hydrateFromIndexedDb();
     final list = _memoryMirror.values.toList()
       ..sort((a, b) => a.queuedAt.compareTo(b.queuedAt));
@@ -98,7 +90,7 @@ class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
   @override
   Future<void> removePendingRecord(String matchId) async {
     _memoryMirror.remove(matchId);
-    _saveToLocalStorageMirror();
+    _removeRecordFromLocalStorage(matchId);
 
     final db = await _openDb();
     if (db == null) return;
@@ -126,9 +118,7 @@ class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
   @override
   Future<void> clearAll() async {
     _memoryMirror.clear();
-    try {
-      web.window.localStorage.removeItem(_localStorageFallbackKey);
-    } catch (_) {}
+    _clearAllLocalStorageRecords();
 
     final db = await _openDb();
     if (db == null) return;
@@ -147,6 +137,34 @@ class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
         onTimeout: () {},
       );
     } catch (_) {
+    } finally {
+      db.close();
+    }
+  }
+
+  Future<bool> _saveRecordToIndexedDb(String matchId, String encodedJson) async {
+    final db = await _openDb();
+    if (db == null) return false;
+    try {
+      final completer = Completer<bool>();
+      final tx = db.transaction(_storeName.toJS, 'readwrite');
+      tx.oncomplete = ((web.Event _) {
+        if (!completer.isCompleted) completer.complete(true);
+      }).toJS;
+      tx.onerror = ((web.Event _) {
+        if (!completer.isCompleted) completer.complete(false);
+      }).toJS;
+      tx.onabort = ((web.Event _) {
+        if (!completer.isCompleted) completer.complete(false);
+      }).toJS;
+      final store = tx.objectStore(_storeName);
+      store.put(encodedJson.toJS, matchId.toJS);
+      return await completer.future.timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () => false,
+      );
+    } catch (_) {
+      return false;
     } finally {
       db.close();
     }
@@ -197,27 +215,92 @@ class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
     }
   }
 
-  void _saveToLocalStorageMirror() {
+  bool _saveRecordToLocalStorage(String matchId, String encodedJson) {
     try {
-      final list = _memoryMirror.values.map((r) => r.toJson()).toList();
       web.window.localStorage.setItem(
-        _localStorageFallbackKey,
-        jsonEncode(list),
+        _storageKeyForMatch(matchId),
+        encodedJson,
       );
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  void _removeRecordFromLocalStorage(String matchId) {
+    try {
+      web.window.localStorage.removeItem(_storageKeyForMatch(matchId));
+      final String? legacyRaw =
+          web.window.localStorage.getItem(_legacyQueueKey);
+      if (legacyRaw != null && legacyRaw.isNotEmpty) {
+        final dynamic decoded = jsonDecode(legacyRaw);
+        if (decoded is List) {
+          final int beforeLen = decoded.length;
+          final filtered = decoded
+              .where((item) =>
+                  item is Map<String, dynamic> &&
+                  item['match_id']?.toString() != matchId)
+              .toList();
+          if (filtered.length != beforeLen) {
+            if (filtered.isEmpty) {
+              web.window.localStorage.removeItem(_legacyQueueKey);
+            } else {
+              web.window.localStorage.setItem(
+                _legacyQueueKey,
+                jsonEncode(filtered),
+              );
+            }
+          }
+        }
+      }
     } catch (_) {}
   }
 
-  void _hydrateFromLocalStorageMirror() {
+  void _clearAllLocalStorageRecords() {
     try {
-      final raw = web.window.localStorage.getItem(_localStorageFallbackKey);
-      if (raw == null || raw.isEmpty) return;
-      final dynamic decoded = jsonDecode(raw);
-      if (decoded is List) {
-        for (final item in decoded) {
-          if (item is Map<String, dynamic>) {
-            final rec = CachedTelemetryRecord.fromJson(item);
+      final storage = web.window.localStorage;
+      final List<String> keysToRemove = <String>[];
+      for (int i = 0; i < storage.length; i++) {
+        final String? key = storage.key(i);
+        if (key != null &&
+            (key.startsWith(_perMatchKeyPrefix) || key == _legacyQueueKey)) {
+          keysToRemove.add(key);
+        }
+      }
+      for (final key in keysToRemove) {
+        storage.removeItem(key);
+      }
+    } catch (_) {}
+  }
+
+  void _hydrateFromLocalStorageKeys() {
+    try {
+      final storage = web.window.localStorage;
+      for (int i = 0; i < storage.length; i++) {
+        final String? key = storage.key(i);
+        if (key == null) continue;
+        if (key.startsWith(_perMatchKeyPrefix)) {
+          final String? raw = storage.getItem(key);
+          if (raw == null || raw.isEmpty) continue;
+          final dynamic decoded = jsonDecode(raw);
+          if (decoded is Map<String, dynamic>) {
+            final rec = CachedTelemetryRecord.fromJson(decoded);
             if (rec.matchId.isNotEmpty) {
               _memoryMirror[rec.matchId] = rec;
+            }
+          }
+        } else if (key == _legacyQueueKey) {
+          final String? raw = storage.getItem(key);
+          if (raw == null || raw.isEmpty) continue;
+          final dynamic decoded = jsonDecode(raw);
+          if (decoded is List) {
+            for (final item in decoded) {
+              if (item is Map<String, dynamic>) {
+                final rec = CachedTelemetryRecord.fromJson(item);
+                if (rec.matchId.isNotEmpty) {
+                  _memoryMirror[rec.matchId] = rec;
+                }
+              }
             }
           }
         }

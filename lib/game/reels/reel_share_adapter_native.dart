@@ -75,10 +75,11 @@ class NativeReelShareAdapter implements ReelShareAdapter {
           }
         } catch (_) {}
 
-        // 2. Fallback to launching the local file URI via OS handler
+        // 2. Fallback to launching the local file URI via OS handler (does not
+        //    count as a system share sheet; reported as savedOrDownloadedFallback).
         if (!openedSystemSheet) {
           try {
-            openedSystemSheet = await launchUrl(
+            await launchUrl(
               Uri.file(filePath),
               mode: LaunchMode.externalApplication,
             );
