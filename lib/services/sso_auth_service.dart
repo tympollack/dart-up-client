@@ -141,8 +141,19 @@ class SsoAuthService {
     }
   }
 
-  /// Extracts session credentials from cookie header strings
-  static ExtractedSession? parseCookieSession(String cookieHeader) {
+  /// Supabase project ref (first host label) of [AppConfig.supabaseUrl].
+  static String? get configuredProjectRef {
+    final host = Uri.tryParse(AppConfig.supabaseUrl)?.host ?? '';
+    final ref = host.split('.').first;
+    return ref.isEmpty ? null : ref;
+  }
+
+  /// Extracts session credentials from cookie header strings.
+  ///
+  /// When [projectRef] is given, `sb-<ref>-auth-token` cookies that belong to a
+  /// *different* Supabase project are ignored: other SunShade apps share the
+  /// `.sunshade.icu` domain, and their refresh tokens are unknown to this project.
+  static ExtractedSession? parseCookieSession(String cookieHeader, {String? projectRef}) {
     if (cookieHeader.trim().isEmpty) return null;
 
     final Map<String, String> cookies = {};
@@ -160,9 +171,13 @@ class SsoAuthService {
     }
 
     // 1. Check for chunked or standalone sb-*-auth-token cookies
-    final List<String> authKeys = cookies.keys
-        .where((k) => k.contains('-auth-token') || k == 'sb-auth-token')
-        .toList();
+    final projectCookie = RegExp(r'^sb-(.+)-auth-token(\.\d+)?$');
+    final List<String> authKeys = cookies.keys.where((k) {
+      if (!(k.contains('-auth-token') || k == 'sb-auth-token')) return false;
+      if (projectRef == null) return true;
+      final m = projectCookie.firstMatch(k);
+      return m == null || m.group(1) == projectRef;
+    }).toList();
 
     if (authKeys.isNotEmpty) {
       // Reassemble chunked cookies (e.g. .0, .1) if present
@@ -326,7 +341,7 @@ class SsoAuthService {
   /// and hydrates Supabase and HubClient.sharedService.
   Future<bool> hydrateFromCookie() async {
     final cookieStr = cookieReader.getCookieString();
-    final session = parseCookieSession(cookieStr);
+    final session = parseCookieSession(cookieStr, projectRef: configuredProjectRef);
 
     if (session == null || session.accessToken.isEmpty) {
       return false;

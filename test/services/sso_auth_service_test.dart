@@ -100,6 +100,21 @@ void main() {
       expect(str, isNot(contains('SUPER_SECRET_REFRESH_TOKEN')));
     });
 
+    test('Ignores sb-*-auth-token cookies from other Supabase projects when projectRef is given', () {
+      String enc(String access, String refresh) =>
+          'base64-${base64Url.encode(utf8.encode(jsonEncode({'access_token': access, 'refresh_token': refresh}))).replaceAll('=', '')}';
+      // Foreign project's cookie is listed FIRST.
+      final cookie = 'sb-otherproject-auth-token=${enc('foreign_access', 'foreign_refresh')}; '
+          'sb-rweehbzsflhhtwjrjnvy-auth-token=${enc('mine_access', 'mine_refresh')}';
+
+      final scoped = SsoAuthService.parseCookieSession(cookie, projectRef: 'rweehbzsflhhtwjrjnvy');
+      expect(scoped?.accessToken, equals('mine_access'));
+      expect(scoped?.refreshToken, equals('mine_refresh'));
+
+      final onlyForeign = 'sb-otherproject-auth-token=${enc('foreign_access', 'foreign_refresh')}';
+      expect(SsoAuthService.parseCookieSession(onlyForeign, projectRef: 'rweehbzsflhhtwjrjnvy'), isNull);
+    });
+
     test('SsoAuthService.hydrateFromCookie hydrates HubClient session', () async {
       final stubReader = StubCookieReader();
       stubReader.stubCookie = 'sb-access-token=hydrate_test_token; user_id=test_user_77';
