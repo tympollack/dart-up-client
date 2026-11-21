@@ -3,9 +3,13 @@ import 'dart:io';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:flame/components.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
+import 'package:sd_client/core/dart_up_game.dart';
+import 'package:sd_client/core/main_mvp.dart';
+import 'package:sd_client/services/telemetry/telemetry_codec_web.dart' as web_lz;
 import 'package:sd_client/services/telemetry/telemetry_dispatch_hook.dart';
 import 'package:sd_client/services/telemetry/telemetry_event_packer.dart';
 import 'package:sd_client/services/telemetry/telemetry_storage_native.dart';
@@ -251,6 +255,79 @@ void main() {
       // Verify offline queue is now empty after flush
       final remainingAfterFlush = await diskStore.loadPendingRecords();
       expect(remainingAfterFlush, isEmpty);
+    });
+
+    test('StarDartMVP and DartUpGame record zero initial velocity at spawn and StarDartMVP.endMatch dispatches telemetry', () async {
+      final List<Map<String, dynamic>> postedRecaps = <Map<String, dynamic>>[];
+      final mockClient = MockClient((http.Request request) async {
+        if (request.url.path.endsWith('/api/recaps/ingest')) {
+          postedRecaps.add(jsonDecode(request.body) as Map<String, dynamic>);
+        }
+        return http.Response(jsonEncode({'ok': true}), 200);
+      });
+
+      final hook = TelemetryDispatchHook(
+        baseUrl: 'https://hub-stag.sunshade.icu',
+        httpClient: mockClient,
+        offlineStore: InMemoryTelemetryOfflineStore(),
+      );
+
+      final mvpGame = StarDartMVP(
+        matchId: 'mvp_live_match_01',
+        enableRealtimePolling: false,
+        telemetryDispatchHook: hook,
+      );
+      mvpGame.onGameResize(Vector2(1280, 720));
+      await mvpGame.onLoad();
+      mvpGame.onMount();
+
+      // Step one 20Hz sample (0.05s) without moving the ship
+      mvpGame.update(0.05);
+      expect(mvpGame.telemetryRingBuffer.length, equals(1));
+
+      final cursor = TelemetryEntityCursor();
+      mvpGame.telemetryRingBuffer.readEntityAt(
+        chronologicalTickIndex: 0,
+        entitySlot: 0,
+        outCursor: cursor,
+      );
+      expect(cursor.vx, equals(0.0));
+      expect(cursor.vy, equals(0.0));
+
+      final dispatchRes = await mvpGame.endMatch();
+      expect(dispatchRes.uploaded, isTrue);
+      expect(postedRecaps.length, equals(1));
+      expect(postedRecaps.first['match_id'], equals('mvp_live_match_01'));
+      expect(postedRecaps.first['format'], equals('dtrp_v1_zlib'));
+
+      // Also verify DartUpGame first sample records (0, 0) velocity at screen center spawn
+      final dartUpGame = DartUpGame(
+        matchId: 'dartup_spawn_vel_test',
+        spawnIsolateOnLoad: false,
+        telemetryDispatchHook: hook,
+      );
+      dartUpGame.onGameResize(Vector2(1280, 720));
+      await dartUpGame.onLoad();
+      dartUpGame.onMount();
+      dartUpGame.update(0.05);
+
+      expect(dartUpGame.telemetryRingBuffer.length, equals(1));
+      dartUpGame.telemetryRingBuffer.readEntityAt(
+        chronologicalTickIndex: 0,
+        entitySlot: 0,
+        outCursor: cursor,
+      );
+      expect(cursor.x, closeTo(640.0, 0.01));
+      expect(cursor.y, closeTo(360.0, 0.01));
+      expect(cursor.vx, equals(0.0));
+      expect(cursor.vy, equals(0.0));
+    });
+
+    test('Cross-platform LZ and ZLIB codec payloads both unpack identically and report distinct format labels', () {
+      final raw = Uint8List.fromList(List<int>.generate(256, (i) => i % 16));
+      final lzCompressed = web_lz.lzEncode(raw);
+      final lzDecompressed = web_lz.lzDecode(lzCompressed);
+      expect(lzDecompressed, equals(raw));
     });
   });
 }

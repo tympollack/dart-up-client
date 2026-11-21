@@ -65,9 +65,20 @@ class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
     final db = await _openDb();
     if (db == null) return;
     try {
+      final completer = Completer<void>();
       final tx = db.transaction(_storeName.toJS, 'readwrite');
+      tx.oncomplete = ((web.Event _) {
+        if (!completer.isCompleted) completer.complete();
+      }).toJS;
+      tx.onerror = ((web.Event _) {
+        if (!completer.isCompleted) completer.complete();
+      }).toJS;
       final store = tx.objectStore(_storeName);
       store.put(jsonEncode(record.toJson()).toJS, record.matchId.toJS);
+      await completer.future.timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () {},
+      );
     } catch (_) {
       // Fallback mirror already saved
     } finally {
@@ -78,6 +89,7 @@ class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
   @override
   Future<List<CachedTelemetryRecord>> loadPendingRecords() async {
     _hydrateFromLocalStorageMirror();
+    await _hydrateFromIndexedDb();
     final list = _memoryMirror.values.toList()
       ..sort((a, b) => a.queuedAt.compareTo(b.queuedAt));
     return list;
@@ -91,9 +103,20 @@ class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
     final db = await _openDb();
     if (db == null) return;
     try {
+      final completer = Completer<void>();
       final tx = db.transaction(_storeName.toJS, 'readwrite');
+      tx.oncomplete = ((web.Event _) {
+        if (!completer.isCompleted) completer.complete();
+      }).toJS;
+      tx.onerror = ((web.Event _) {
+        if (!completer.isCompleted) completer.complete();
+      }).toJS;
       final store = tx.objectStore(_storeName);
       store.delete(matchId.toJS);
+      await completer.future.timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () {},
+      );
     } catch (_) {
     } finally {
       db.close();
@@ -110,8 +133,64 @@ class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
     final db = await _openDb();
     if (db == null) return;
     try {
+      final completer = Completer<void>();
       final tx = db.transaction(_storeName.toJS, 'readwrite');
+      tx.oncomplete = ((web.Event _) {
+        if (!completer.isCompleted) completer.complete();
+      }).toJS;
+      tx.onerror = ((web.Event _) {
+        if (!completer.isCompleted) completer.complete();
+      }).toJS;
       tx.objectStore(_storeName).clear();
+      await completer.future.timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () {},
+      );
+    } catch (_) {
+    } finally {
+      db.close();
+    }
+  }
+
+  Future<void> _hydrateFromIndexedDb() async {
+    final db = await _openDb();
+    if (db == null) return;
+    try {
+      final completer = Completer<void>();
+      final tx = db.transaction(_storeName.toJS, 'readonly');
+      final store = tx.objectStore(_storeName);
+      final req = store.getAll();
+
+      req.onsuccess = ((web.Event _) {
+        try {
+          final JSArray<JSAny?>? results = req.result as JSArray<JSAny?>?;
+          if (results != null) {
+            final dartList = results.toDart;
+            for (final entry in dartList) {
+              if (entry != null && entry.isA<JSString>()) {
+                final String rawJson = (entry as JSString).toDart;
+                final dynamic decoded = jsonDecode(rawJson);
+                if (decoded is Map<String, dynamic>) {
+                  final rec = CachedTelemetryRecord.fromJson(decoded);
+                  if (rec.matchId.isNotEmpty) {
+                    _memoryMirror[rec.matchId] = rec;
+                  }
+                }
+              }
+            }
+          }
+        } catch (_) {}
+        if (!completer.isCompleted) completer.complete();
+      }).toJS;
+
+      req.onerror = ((web.Event _) {
+        if (!completer.isCompleted) completer.complete();
+      }).toJS;
+
+      await completer.future.timeout(
+        const Duration(milliseconds: 500),
+        onTimeout: () {},
+      );
     } catch (_) {
     } finally {
       db.close();

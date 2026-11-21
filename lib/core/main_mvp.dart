@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math';
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
@@ -9,6 +10,8 @@ import 'package:sd_client/swarm/swarm_manager.dart'; // NEW: Import our Boids en
 import 'package:sd_client/hub/hub_client.dart'; // Hub integration
 import 'package:sd_client/game/grid_layer.dart';
 import 'package:sd_client/game/tactical_rts_component.dart';
+import 'package:sd_client/services/telemetry/telemetry_dispatch_hook.dart';
+import 'package:sd_client/simulation/telemetry/telemetry_ring_buffer.dart';
 
 void main() {
   HubClient.initializeFromUrl(Uri.base);
@@ -40,11 +43,25 @@ void main() {
 }
 
 class StarDartMVP extends FlameGame with TapCallbacks {
-  StarDartMVP({String? matchId, this.enableRealtimePolling = true})
-      : matchId = matchId ?? HubClient.generateMatchId();
+  StarDartMVP({
+    String? matchId,
+    this.enableRealtimePolling = true,
+    TelemetryRingBuffer? telemetryRingBuffer,
+    TelemetryDispatchHook? telemetryDispatchHook,
+  })  : matchId = matchId ?? HubClient.generateMatchId(),
+        _injectedTelemetryRingBuffer = telemetryRingBuffer,
+        _injectedTelemetryDispatchHook = telemetryDispatchHook;
 
   final String matchId;
   final bool enableRealtimePolling;
+  final TelemetryRingBuffer? _injectedTelemetryRingBuffer;
+  final TelemetryDispatchHook? _injectedTelemetryDispatchHook;
+  late final TelemetryRingBuffer telemetryRingBuffer;
+  late final TelemetryDispatchHook telemetryDispatchHook;
+  double _simulationTime = 0.0;
+  double _prevSampledShipX = 0.0;
+  double _prevSampledShipY = 0.0;
+  bool _hasSampledInitialShipPosition = false;
   late Ship playerShip;
   late SwarmManager droneSwarm; // NEW: The Swarm!
   late TacticalRTSComponent tacticalRTS; // NEW: Kenney RTS Tactical Subsystem!
@@ -57,6 +74,14 @@ class StarDartMVP extends FlameGame with TapCallbacks {
 
   @override
   Future<void> onLoad() async {
+    telemetryRingBuffer = _injectedTelemetryRingBuffer ?? TelemetryRingBuffer();
+    telemetryDispatchHook = _injectedTelemetryDispatchHook ??
+        TelemetryDispatchHook(
+          baseUrl: HubClient.sharedService.baseUrl,
+          accessTokenProvider: () => HubClient.sharedService.accessToken,
+        );
+    unawaited(telemetryDispatchHook.flushPendingQueue());
+
     HubClient.sharedService.subscribeToMatchChannel(
       matchId,
       pollInterval: enableRealtimePolling ? null : Duration.zero,
@@ -77,6 +102,9 @@ class StarDartMVP extends FlameGame with TapCallbacks {
       ..position = Vector2.zero() 
       ..size = Vector2(40, 50)
       ..anchor = Anchor.center;
+    _prevSampledShipX = playerShip.position.x;
+    _prevSampledShipY = playerShip.position.y;
+    _hasSampledInitialShipPosition = true;
     gameWorld.add(playerShip);
 
     // 4. SPAWN THE SWARM
@@ -97,11 +125,37 @@ class StarDartMVP extends FlameGame with TapCallbacks {
   @override
   void update(double dt) {
     super.update(dt);
+    _simulationTime += dt;
     
     // NEW: The core integration!
     // Every single frame, we tell the swarm exactly where the ship is.
     // If the ship is moving, the drones will chase it. If it's still, they will orbit.
     droneSwarm.setTarget(playerShip.position);
+
+    if (telemetryRingBuffer.advanceSampleClock(dt)) {
+      final double interval = telemetryRingBuffer.sampleIntervalSeconds;
+      final double shipX = playerShip.position.x;
+      final double shipY = playerShip.position.y;
+      final double vx = _hasSampledInitialShipPosition
+          ? (shipX - _prevSampledShipX) / interval
+          : 0.0;
+      final double vy = _hasSampledInitialShipPosition
+          ? (shipY - _prevSampledShipY) / interval
+          : 0.0;
+      _prevSampledShipX = shipX;
+      _prevSampledShipY = shipY;
+      _hasSampledInitialShipPosition = true;
+
+      telemetryRingBuffer.beginTick(timestamp: _simulationTime);
+      telemetryRingBuffer.recordEntityState(
+        entityId: 1,
+        x: shipX,
+        y: shipY,
+        vx: vx,
+        vy: vy,
+        hull: 100.0,
+      );
+    }
   }
 
   @override
@@ -117,15 +171,21 @@ class StarDartMVP extends FlameGame with TapCallbacks {
     }
   }
 
-  void endMatch() {
+  Future<TelemetryDispatchResult> endMatch() async {
     debugPrint("Ending match and syncing to Hub...");
-    HubClient.postMatchResult(
+    unawaited(
+      HubClient.postMatchResult(
+        matchId: matchId,
+        gameName: 'Star Dart',
+        opponentName: 'Swarm Director',
+        result: 'victory', // Mocking a victory for now
+        matchType: 'sandbox',
+        moves: droneSwarm.unitCount, // Arbitrary "moves" score based on active drones
+      ),
+    );
+    return telemetryDispatchHook.dispatchMatchTelemetry(
       matchId: matchId,
-      gameName: 'Star Dart',
-      opponentName: 'Swarm Director',
-      result: 'victory', // Mocking a victory for now
-      matchType: 'sandbox',
-      moves: droneSwarm.unitCount, // Arbitrary "moves" score based on active drones
+      ringBuffer: telemetryRingBuffer,
     );
   }
 
