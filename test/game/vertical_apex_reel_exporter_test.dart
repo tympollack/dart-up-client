@@ -198,16 +198,35 @@ void main() {
       final picture = recorder.endRecording();
       picture.dispose();
 
-      // Verify offline MP4 container structure (`ftyp`, `moov`, `mdat` boxes)
+      // Verify offline MP4 container structure (`ftyp`, `moov`, `mvhd`, `trak`,
+      // `mdia`, `minf`, `stbl`, `stsd`, `avc1`, `avcC`, `stts`, `stsc`, `stsz`, `stco`, `mdat`)
       final mp4Text = latin1.decode(reel.mp4Bytes);
       expect(mp4Text, contains('ftypisom'));
       expect(mp4Text, contains('moov'));
+      expect(mp4Text, contains('mvhd'));
+      expect(mp4Text, contains('trak'));
+      expect(mp4Text, contains('tkhd'));
+      expect(mp4Text, contains('mdia'));
+      expect(mp4Text, contains('hdlr'));
+      expect(mp4Text, contains('minf'));
+      expect(mp4Text, contains('stbl'));
+      expect(mp4Text, contains('stsd'));
+      expect(mp4Text, contains('avc1'));
+      expect(mp4Text, contains('avcC'));
+      expect(mp4Text, contains('stts'));
+      expect(mp4Text, contains('stsc'));
+      expect(mp4Text, contains('stsz'));
+      expect(mp4Text, contains('stco'));
       expect(mp4Text, contains('mdat'));
       expect(mp4Text, contains('CMDR_VANGUARD'));
       expect(mp4Text, contains('hub.sunshade.icu/recap/match_apex_916'));
 
-      // Verify native share adapter persisted the MP4 clip
+      // Verify native share adapter persisted the MP4 clip and reported status
       expect(exported.shareResult.shared, isTrue);
+      expect(
+        exported.shareResult.status,
+        equals(ReelShareStatus.savedOrDownloadedFallback),
+      );
       expect(exported.shareResult.savedFilePath, isNotNull);
       final savedFile = File(exported.shareResult.savedFilePath!);
       expect(await savedFile.exists(), isTrue);

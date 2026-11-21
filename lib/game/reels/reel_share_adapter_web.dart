@@ -1,10 +1,12 @@
 // =============================================================================
 // reel_share_adapter_web.dart
 //
-// Web Share API / anchor download adapter for exported 9:16 MP4 highlight reels.
+// Web Share API (`navigator.share` with MP4 file) and anchor download fallback
+// adapter for exported 9:16 MP4 highlight reels.
 // =============================================================================
 
 import 'dart:js_interop';
+import 'dart:js_interop_unsafe';
 import 'dart:typed_data';
 
 import 'package:web/web.dart' as web;
@@ -23,6 +25,32 @@ class WebReelShareAdapter implements ReelShareAdapter {
   }) async {
     try {
       final blobParts = <JSAny>[mp4Bytes.toJS].toJS;
+      final file = web.File(
+        blobParts,
+        fileName,
+        web.FilePropertyBag(type: 'video/mp4'),
+      );
+
+      // 1. Attempt Web Share API (`navigator.canShare` / `navigator.share`)
+      final nav = web.window.navigator;
+      final shareData = web.ShareData(
+        title: title,
+        text: '$title — $recapUrl',
+        url: recapUrl,
+        files: <web.File>[file].toJS,
+      );
+
+      if ((nav as JSObject).has('canShare') && nav.canShare(shareData)) {
+        await nav.share(shareData).toDart;
+        return ReelShareResult(
+          shared: true,
+          status: ReelShareStatus.sharedViaSystemSheet,
+          fileName: fileName,
+          shareUrl: recapUrl,
+        );
+      }
+
+      // 2. Fallback to browser Blob download
       final blob = web.Blob(
         blobParts,
         web.BlobPropertyBag(type: 'video/mp4'),
@@ -34,14 +62,21 @@ class WebReelShareAdapter implements ReelShareAdapter {
       anchor.download = fileName;
       anchor.click();
       web.URL.revokeObjectURL(objectUrl);
-    } catch (_) {
-      // Headless or restricted DOM environment fallback
-    }
 
-    return ReelShareResult(
-      shared: true,
-      fileName: fileName,
-      shareUrl: recapUrl,
-    );
+      return ReelShareResult(
+        shared: true,
+        status: ReelShareStatus.savedOrDownloadedFallback,
+        fileName: fileName,
+        shareUrl: recapUrl,
+      );
+    } catch (e) {
+      return ReelShareResult(
+        shared: false,
+        status: ReelShareStatus.failed,
+        fileName: fileName,
+        shareUrl: recapUrl,
+        error: e.toString(),
+      );
+    }
   }
 }

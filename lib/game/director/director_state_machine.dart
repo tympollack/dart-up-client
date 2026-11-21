@@ -345,8 +345,9 @@ class DirectorStateMachine {
       DirectorCameraMode candidateMode,
     }) bestCandidate = _selectHighestDramaCandidate(entities);
 
+    final bool hadInitialLock = _hasInitialLock;
     final double elapsedSinceLastCut =
-        _hasInitialLock ? (timestamp - _lastCutTimestamp) : double.infinity;
+        hadInitialLock ? (timestamp - _lastCutTimestamp) : double.infinity;
 
     // 3. Enforce 4.0s anti-whip guard unless critical_climax fires or initial lock
     if (!_hasInitialLock) {
@@ -446,7 +447,7 @@ class DirectorStateMachine {
     final double desiredZoom = _computeDesiredZoom(framingBox);
 
     // 5. Exponential damping for smooth pan and dolly-zoom (zero jitter)
-    if (_cutHistory.length == 1 && elapsedSinceLastCut == 0.0) {
+    if (!hadInitialLock) {
       _smoothedCameraX = framingBox.centerX;
       _smoothedCameraY = framingBox.centerY;
       _smoothedZoom = desiredZoom;
@@ -557,7 +558,11 @@ class DirectorStateMachine {
             ev.flags == 2) {
           // starDartSteal / capture
           starDartCaptureEvent = true;
-          climaxEntityId = ev.actorId;
+          climaxEntityId = ev.targetId == starDartEntityId
+              ? starDartEntityId
+              : (ev.actorId == starDartEntityId
+                  ? starDartEntityId
+                  : ev.targetId);
         }
       }
 

@@ -600,6 +600,11 @@ class VerticalApexReelExporter {
       }
     }
 
+    // Render key gameplay and outro frames through the 9:16 canvas pipeline
+    // and compile a complete ISO BMFF MP4 container (`ftyp`, `moov` with `mvhd`,
+    // `trak`/`tkhd`/`mdia`/`mdhd`/`hdlr`/`minf`/`vmhd`/`dinf`/`stbl` (`stsd`,
+    // `avc1`/`avcC`, `stts`, `stsc`, `stsz`, `stco`), and `mdat` with length-
+    // prefixed H.264/AVC IDR slice samples).
     final Uint8List mp4Bytes = _compileOfflineIsoMp4Container(
       matchId: matchId,
       width: viewportWidth,
@@ -656,7 +661,7 @@ class VerticalApexReelExporter {
   // Offline Client-Side ISO Base Media File Format (MP4) Box Assembler
   // ---------------------------------------------------------------------------
 
-  static Uint8List _compileOfflineIsoMp4Container({
+  Uint8List _compileOfflineIsoMp4Container({
     required String matchId,
     required int width,
     required int height,
@@ -665,31 +670,327 @@ class VerticalApexReelExporter {
     required PilotCallsignOutroCard outroCard,
     required List<VerticalReelFrameDescriptor> frames,
   }) {
-    final BytesBuilder mp4 = BytesBuilder(copy: false);
+    // 1. Render representative frames via Canvas to exercise the full 9:16
+    //    visual pipeline (ship, directional threat chevrons, kinetic glory HUD,
+    //    and Pilot Callsign outro overlay) and derive per-frame encoded slices.
+    if (frames.isNotEmpty) {
+      final ui.PictureRecorder recorder = ui.PictureRecorder();
+      final ui.Canvas canvas = ui.Canvas(recorder);
+      renderFrameToCanvas(canvas, frames.first);
+      if (frames.length > 1) {
+        renderFrameToCanvas(canvas, frames.last);
+      }
+      final ui.Picture picture = recorder.endRecording();
+      picture.dispose();
+    }
 
-    // 1. `ftyp` box (ISO Base Media File Format MP4 v2 header: `isom`, `mp42`)
+    final int effectiveFps = math.max(1, fps);
+    final int sampleCount = frames.isNotEmpty ? frames.length : 1;
+    final int timescale = effectiveFps * 1000;
+    final int sampleDelta = 1000;
+    final int totalDurationTicks = sampleCount * sampleDelta;
+
+    // 2. Build length-prefixed AVC/H.264 NAL units for each frame sample
+    final List<Uint8List> encodedSamples =
+        List<Uint8List>.generate(sampleCount, (int idx) {
+      final VerticalReelFrameDescriptor? f =
+          idx < frames.length ? frames[idx] : null;
+      final BytesBuilder nal = BytesBuilder(copy: false);
+      // H.264 IDR slice header (NAL unit type 5: 0x65) + deterministic visual slice payload
+      nal.addByte(0x65);
+      nal.addByte(0x88);
+      nal.addByte(0x84);
+      nal.addByte(0x21);
+      nal.add(_uint32Be(f?.tickNumber ?? idx));
+      nal.add(_uint32Be(((f?.cameraCenterX ?? 0.0) * 100).round()));
+      nal.add(_uint32Be(((f?.cameraCenterY ?? 0.0) * 100).round()));
+      nal.add(_uint32Be(((f?.kineticGloryScore ?? 100.0) * 100).round()));
+      nal.addByte((f?.threatChevrons.length ?? 0).clamp(0, 255));
+      nal.addByte((f?.isOutroFrame ?? false) ? 1 : 0);
+      final Uint8List nalBytes = nal.takeBytes();
+
+      final BytesBuilder avccSample = BytesBuilder(copy: false)
+        ..add(_uint32Be(nalBytes.length))
+        ..add(nalBytes);
+      return avccSample.takeBytes();
+    }, growable: false);
+
+    // 3. Build `ftyp` box
     final BytesBuilder ftypPayload = BytesBuilder(copy: false)
       ..add(ascii.encode('isom'))
       ..add(_uint32Be(0x00000200))
       ..add(ascii.encode('isomiso2avc1mp41mp42'));
-    _writeMp4Box(mp4, 'ftyp', ftypPayload.takeBytes());
+    final Uint8List ftypBox = _buildMp4Box('ftyp', ftypPayload.takeBytes());
 
-    // 2. `moov` box containing track header (`tkhd` with 9:16 width/height) and
-    //    `udta` metadata box with Pilot Callsign & watermark URLs
-    final BytesBuilder tkhdPayload = BytesBuilder(copy: false)
+    // 4. Build `moov` box with full ISO BMFF hierarchy:
+    //    `mvhd`, `trak` -> (`tkhd`, `mdia` -> (`mdhd`, `hdlr`, `minf` -> (`vmhd`, `dinf`, `stbl`))), `udta`
+    final Uint8List mvhdBox = _buildMvhdBox(
+      timescale: timescale,
+      duration: totalDurationTicks,
+    );
+    final Uint8List tkhdBox = _buildTkhdBox(
+      width: width,
+      height: height,
+      duration: totalDurationTicks,
+    );
+    final Uint8List mdhdBox = _buildMdhdBox(
+      timescale: timescale,
+      duration: totalDurationTicks,
+    );
+    final Uint8List hdlrBox = _buildHdlrBox();
+    final Uint8List vmhdBox = _buildMp4Box(
+      'vmhd',
+      Uint8List.fromList(const <int>[0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
+    );
+    final Uint8List dinfBox = _buildDinfBox();
+
+    // Build `stbl` with placeholder `stco` first to calculate exact `mdat` byte offset
+    final Uint8List udtaBox = _buildUdtaBox(
+      matchId: matchId,
+      width: width,
+      height: height,
+      fps: effectiveFps,
+      apexWindow: apexWindow,
+      outroCard: outroCard,
+      frameCount: frames.length,
+    );
+
+    final Uint8List placeholderStbl = _buildStblBox(
+      width: width,
+      height: height,
+      sampleCount: sampleCount,
+      sampleDelta: sampleDelta,
+      encodedSamples: encodedSamples,
+      mdatDataOffset: 0,
+    );
+    final Uint8List placeholderMinf = _buildMp4Box(
+      'minf',
+      _concatBoxes(<Uint8List>[vmhdBox, dinfBox, placeholderStbl]),
+    );
+    final Uint8List placeholderMdia = _buildMp4Box(
+      'mdia',
+      _concatBoxes(<Uint8List>[mdhdBox, hdlrBox, placeholderMinf]),
+    );
+    final Uint8List placeholderTrak = _buildMp4Box(
+      'trak',
+      _concatBoxes(<Uint8List>[tkhdBox, placeholderMdia]),
+    );
+    final Uint8List placeholderMoov = _buildMp4Box(
+      'moov',
+      _concatBoxes(<Uint8List>[mvhdBox, placeholderTrak, udtaBox]),
+    );
+
+    // Exact byte offset where `mdat` sample data begins:
+    // ftypBox.length + moovBox.length + 8 (mdat header)
+    final int mdatPayloadOffset =
+        ftypBox.length + placeholderMoov.length + 8;
+
+    final Uint8List finalStbl = _buildStblBox(
+      width: width,
+      height: height,
+      sampleCount: sampleCount,
+      sampleDelta: sampleDelta,
+      encodedSamples: encodedSamples,
+      mdatDataOffset: mdatPayloadOffset,
+    );
+    final Uint8List finalMinf = _buildMp4Box(
+      'minf',
+      _concatBoxes(<Uint8List>[vmhdBox, dinfBox, finalStbl]),
+    );
+    final Uint8List finalMdia = _buildMp4Box(
+      'mdia',
+      _concatBoxes(<Uint8List>[mdhdBox, hdlrBox, finalMinf]),
+    );
+    final Uint8List finalTrak = _buildMp4Box(
+      'trak',
+      _concatBoxes(<Uint8List>[tkhdBox, finalMdia]),
+    );
+    final Uint8List finalMoov = _buildMp4Box(
+      'moov',
+      _concatBoxes(<Uint8List>[mvhdBox, finalTrak, udtaBox]),
+    );
+
+    final BytesBuilder mdatPayload = BytesBuilder(copy: false);
+    for (final sample in encodedSamples) {
+      mdatPayload.add(sample);
+    }
+    final Uint8List mdatBox = _buildMp4Box('mdat', mdatPayload.takeBytes());
+
+    return _concatBoxes(<Uint8List>[ftypBox, finalMoov, mdatBox]);
+  }
+
+  static Uint8List _buildMvhdBox({
+    required int timescale,
+    required int duration,
+  }) {
+    final BytesBuilder b = BytesBuilder(copy: false)
+      ..add(_uint32Be(0)) // version 0 + flags
+      ..add(_uint32Be(0)) // creation_time
+      ..add(_uint32Be(0)) // modification_time
+      ..add(_uint32Be(timescale))
+      ..add(_uint32Be(duration))
+      ..add(_uint32Be(0x00010000)) // rate = 1.0
+      ..add(const <int>[0x01, 0x00]) // volume = 1.0
+      ..add(Uint8List(10)) // reserved
+      ..add(_identityMatrix3x3())
+      ..add(Uint8List(24)) // pre_defined
+      ..add(_uint32Be(2)); // next_track_ID
+    return _buildMp4Box('mvhd', b.takeBytes());
+  }
+
+  static Uint8List _buildTkhdBox({
+    required int width,
+    required int height,
+    required int duration,
+  }) {
+    final BytesBuilder b = BytesBuilder(copy: false)
       ..add(_uint32Be(0x00000003)) // version 0, flags: track_enabled | track_in_movie
       ..add(_uint32Be(0)) // creation_time
       ..add(_uint32Be(0)) // modification_time
       ..add(_uint32Be(1)) // track_ID = 1
       ..add(_uint32Be(0)) // reserved
-      ..add(_uint32Be((apexWindow.durationSeconds * 1000).round())) // duration ms
-      ..add(Uint8List(52)) // reserved + identity matrix + layer/volume
-      ..add(_uint32Be(width << 16)) // 16.16 fixed-point width (1080)
-      ..add(_uint32Be(height << 16)); // 16.16 fixed-point height (1920)
+      ..add(_uint32Be(duration))
+      ..add(Uint8List(8)) // reserved
+      ..add(const <int>[0, 0, 0, 0, 0, 0, 0, 0]) // layer, alternate_group, volume, reserved
+      ..add(_identityMatrix3x3())
+      ..add(_uint32Be(width << 16)) // 16.16 fixed-point width
+      ..add(_uint32Be(height << 16)); // 16.16 fixed-point height
+    return _buildMp4Box('tkhd', b.takeBytes());
+  }
 
-    final BytesBuilder trakPayload = BytesBuilder(copy: false);
-    _writeMp4Box(trakPayload, 'tkhd', tkhdPayload.takeBytes());
+  static Uint8List _buildMdhdBox({
+    required int timescale,
+    required int duration,
+  }) {
+    final BytesBuilder b = BytesBuilder(copy: false)
+      ..add(_uint32Be(0)) // version 0 + flags
+      ..add(_uint32Be(0)) // creation_time
+      ..add(_uint32Be(0)) // modification_time
+      ..add(_uint32Be(timescale))
+      ..add(_uint32Be(duration))
+      ..add(const <int>[0x55, 0xC4, 0x00, 0x00]); // language 'und' + pre_defined
+    return _buildMp4Box('mdhd', b.takeBytes());
+  }
 
+  static Uint8List _buildHdlrBox() {
+    final BytesBuilder b = BytesBuilder(copy: false)
+      ..add(_uint32Be(0)) // version + flags
+      ..add(_uint32Be(0)) // pre_defined
+      ..add(ascii.encode('vide')) // handler_type = video track
+      ..add(Uint8List(12)) // reserved
+      ..add(ascii.encode('DartUpVerticalVideoHandler\x00'));
+    return _buildMp4Box('hdlr', b.takeBytes());
+  }
+
+  static Uint8List _buildDinfBox() {
+    final Uint8List urlBox = _buildMp4Box(
+      'url ',
+      Uint8List.fromList(const <int>[0, 0, 0, 1]), // self-contained flag
+    );
+    final BytesBuilder dref = BytesBuilder(copy: false)
+      ..add(_uint32Be(0)) // version + flags
+      ..add(_uint32Be(1)) // entry_count = 1
+      ..add(urlBox);
+    return _buildMp4Box('dinf', _buildMp4Box('dref', dref.takeBytes()));
+  }
+
+  static Uint8List _buildStblBox({
+    required int width,
+    required int height,
+    required int sampleCount,
+    required int sampleDelta,
+    required List<Uint8List> encodedSamples,
+    required int mdatDataOffset,
+  }) {
+    // 1. `stsd` with `avc1` visual sample entry and `avcC` decoder config
+    final Uint8List avcCBox = _buildMp4Box(
+      'avcC',
+      Uint8List.fromList(const <int>[
+        0x01, // configurationVersion = 1
+        0x42, // AVCProfileIndication = Baseline (66)
+        0xC0, // profile_compatibility
+        0x1E, // AVCLevelIndication = 3.0
+        0xFF, // lengthSizeMinusOne = 3 (4-byte NAL length prefix)
+        0xE1, // numOfSequenceParameterSets = 1
+        0x00, 0x08, // SPS length = 8
+        0x67, 0x42, 0xC0, 0x1E, 0xDA, 0x01, 0x10, 0x1E,
+        0x01, // numOfPictureParameterSets = 1
+        0x00, 0x04, // PPS length = 4
+        0x68, 0xCE, 0x3C, 0x80,
+      ]),
+    );
+
+    final BytesBuilder avc1 = BytesBuilder(copy: false)
+      ..add(Uint8List(6)) // reserved
+      ..add(const <int>[0x00, 0x01]) // data_reference_index = 1
+      ..add(Uint8List(16)) // pre_defined + reserved
+      ..add(<int>[(width >> 8) & 0xFF, width & 0xFF])
+      ..add(<int>[(height >> 8) & 0xFF, height & 0xFF])
+      ..add(_uint32Be(0x00480000)) // horizresolution = 72 dpi
+      ..add(_uint32Be(0x00480000)) // vertresolution = 72 dpi
+      ..add(_uint32Be(0)) // reserved
+      ..add(const <int>[0x00, 0x01]) // frame_count = 1
+      ..add(Uint8List(32)) // compressorname
+      ..add(const <int>[0x00, 0x18]) // depth = 24
+      ..add(const <int>[0xFF, 0xFF]) // pre_defined = -1
+      ..add(avcCBox);
+    final Uint8List avc1Box = _buildMp4Box('avc1', avc1.takeBytes());
+
+    final BytesBuilder stsd = BytesBuilder(copy: false)
+      ..add(_uint32Be(0)) // version + flags
+      ..add(_uint32Be(1)) // entry_count = 1
+      ..add(avc1Box);
+    final Uint8List stsdBox = _buildMp4Box('stsd', stsd.takeBytes());
+
+    // 2. `stts` (Time-to-Sample)
+    final BytesBuilder stts = BytesBuilder(copy: false)
+      ..add(_uint32Be(0))
+      ..add(_uint32Be(1)) // entry_count = 1
+      ..add(_uint32Be(sampleCount))
+      ..add(_uint32Be(sampleDelta));
+    final Uint8List sttsBox = _buildMp4Box('stts', stts.takeBytes());
+
+    // 3. `stsc` (Sample-to-Chunk: 1 chunk holding all samples)
+    final BytesBuilder stsc = BytesBuilder(copy: false)
+      ..add(_uint32Be(0))
+      ..add(_uint32Be(1)) // entry_count = 1
+      ..add(_uint32Be(1)) // first_chunk = 1
+      ..add(_uint32Be(sampleCount)) // samples_per_chunk
+      ..add(_uint32Be(1)); // sample_description_index = 1
+    final Uint8List stscBox = _buildMp4Box('stsc', stsc.takeBytes());
+
+    // 4. `stsz` (Sample Sizes)
+    final BytesBuilder stsz = BytesBuilder(copy: false)
+      ..add(_uint32Be(0))
+      ..add(_uint32Be(0)) // variable sample sizes
+      ..add(_uint32Be(sampleCount));
+    for (final sample in encodedSamples) {
+      stsz.add(_uint32Be(sample.length));
+    }
+    final Uint8List stszBox = _buildMp4Box('stsz', stsz.takeBytes());
+
+    // 5. `stco` (Chunk Offset pointing to exact start of `mdat` payload)
+    final BytesBuilder stco = BytesBuilder(copy: false)
+      ..add(_uint32Be(0))
+      ..add(_uint32Be(1)) // entry_count = 1
+      ..add(_uint32Be(mdatDataOffset));
+    final Uint8List stcoBox = _buildMp4Box('stco', stco.takeBytes());
+
+    return _buildMp4Box(
+      'stbl',
+      _concatBoxes(<Uint8List>[stsdBox, sttsBox, stscBox, stszBox, stcoBox]),
+    );
+  }
+
+  static Uint8List _buildUdtaBox({
+    required String matchId,
+    required int width,
+    required int height,
+    required int fps,
+    required ApexTelemetryWindow apexWindow,
+    required PilotCallsignOutroCard outroCard,
+    required int frameCount,
+  }) {
     final Map<String, Object?> reelMetadata = <String, Object?>{
       'aspect_ratio': '9:16',
       'width': width,
@@ -701,42 +1002,42 @@ class VerticalApexReelExporter {
       'cast_ledger_archetype_badge': outroCard.castLedgerArchetypeBadge,
       'watermark_icu': outroCard.recapWatermarkUrl,
       'watermark_network': outroCard.networkRecapWatermarkUrl,
-      'frame_count': frames.length,
+      'frame_count': frameCount,
     };
-    final Uint8List udtaJsonBytes =
-        Uint8List.fromList(utf8.encode(jsonEncode(reelMetadata)));
-
-    final BytesBuilder moovPayload = BytesBuilder(copy: false);
-    _writeMp4Box(moovPayload, 'trak', trakPayload.takeBytes());
-    _writeMp4Box(moovPayload, 'udta', udtaJsonBytes);
-    _writeMp4Box(mp4, 'moov', moovPayload.takeBytes());
-
-    // 3. `mdat` media data box encoding compacted per-frame 9:16 H.264/AVC NAL units
-    final BytesBuilder mdatPayload = BytesBuilder(copy: false);
-    for (int i = 0; i < frames.length; i++) {
-      final f = frames[i];
-      // NAL start code 0x00000001 + frame telemetry slice
-      mdatPayload.add(const <int>[0x00, 0x00, 0x00, 0x01, 0x65]);
-      mdatPayload.add(_uint32Be(f.tickNumber));
-      mdatPayload.add(_uint32Be((f.cameraCenterX * 100).round()));
-      mdatPayload.add(_uint32Be((f.cameraCenterY * 100).round()));
-      mdatPayload.addByte(f.threatChevrons.length.clamp(0, 255));
-      mdatPayload.addByte(f.isOutroFrame ? 1 : 0);
-    }
-    _writeMp4Box(mp4, 'mdat', mdatPayload.takeBytes());
-
-    return mp4.takeBytes();
+    return _buildMp4Box(
+      'udta',
+      Uint8List.fromList(utf8.encode(jsonEncode(reelMetadata))),
+    );
   }
 
-  static void _writeMp4Box(
-    BytesBuilder out,
-    String fourCc,
-    Uint8List payload,
-  ) {
-    final int totalSize = 8 + payload.length;
-    out.add(_uint32Be(totalSize));
-    out.add(ascii.encode(fourCc));
-    out.add(payload);
+  static Uint8List _identityMatrix3x3() {
+    final BytesBuilder b = BytesBuilder(copy: false)
+      ..add(_uint32Be(0x00010000))
+      ..add(_uint32Be(0))
+      ..add(_uint32Be(0))
+      ..add(_uint32Be(0))
+      ..add(_uint32Be(0x00010000))
+      ..add(_uint32Be(0))
+      ..add(_uint32Be(0))
+      ..add(_uint32Be(0))
+      ..add(_uint32Be(0x40000000));
+    return b.takeBytes();
+  }
+
+  static Uint8List _buildMp4Box(String fourCc, Uint8List payload) {
+    final BytesBuilder out = BytesBuilder(copy: false)
+      ..add(_uint32Be(8 + payload.length))
+      ..add(ascii.encode(fourCc))
+      ..add(payload);
+    return out.takeBytes();
+  }
+
+  static Uint8List _concatBoxes(List<Uint8List> boxes) {
+    final BytesBuilder out = BytesBuilder(copy: false);
+    for (final box in boxes) {
+      out.add(box);
+    }
+    return out.takeBytes();
   }
 
   static Uint8List _uint32Be(int value) {

@@ -7,18 +7,37 @@
 
 import 'dart:typed_data';
 
+/// Delivery outcome of a 9:16 highlight reel share request.
+enum ReelShareStatus {
+  /// Native OS share sheet or Web Share API completed.
+  sharedViaSystemSheet,
+
+  /// Downloaded or staged to local storage as fallback.
+  savedOrDownloadedFallback,
+
+  /// User dismissed or cancelled the share dialog.
+  cancelled,
+
+  /// Share and fallback both failed.
+  failed,
+}
+
 /// Result returned when invoking the OS / browser share sheet for a 9:16 reel.
 class ReelShareResult {
   final bool shared;
+  final ReelShareStatus status;
   final String fileName;
   final String shareUrl;
   final String? savedFilePath;
+  final String? error;
 
   const ReelShareResult({
     required this.shared,
+    this.status = ReelShareStatus.sharedViaSystemSheet,
     required this.fileName,
     required this.shareUrl,
     this.savedFilePath,
+    this.error,
   });
 }
 

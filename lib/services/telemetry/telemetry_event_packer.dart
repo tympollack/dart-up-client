@@ -141,6 +141,14 @@ class TelemetryReplayArchive {
     );
 
     int eventCursor = 0;
+    if (ticks.isNotEmpty) {
+      final int firstTickNumber = ticks.first.tickNumber;
+      while (eventCursor < events.length &&
+          events[eventCursor].tickNumber < firstTickNumber) {
+        eventCursor++;
+      }
+    }
+
     for (final tick in ticks) {
       buffer.beginTick(tickNumber: tick.tickNumber, timestamp: tick.timestamp);
       for (final entity in tick.entities) {
@@ -155,7 +163,7 @@ class TelemetryReplayArchive {
       }
 
       while (eventCursor < events.length &&
-          events[eventCursor].tickNumber <= tick.tickNumber) {
+          events[eventCursor].tickNumber == tick.tickNumber) {
         final ev = events[eventCursor++];
         _writeUnpackedEventToBuffer(buffer, ev);
       }
@@ -163,7 +171,8 @@ class TelemetryReplayArchive {
 
     while (eventCursor < events.length) {
       final ev = events[eventCursor++];
-      if (buffer.length == 0) {
+      if (buffer.length == 0 ||
+          buffer.currentTickNumber != ev.tickNumber) {
         buffer.beginTick(tickNumber: ev.tickNumber, timestamp: ev.timestamp);
       }
       _writeUnpackedEventToBuffer(buffer, ev);

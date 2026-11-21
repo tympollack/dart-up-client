@@ -237,6 +237,9 @@ void main() {
       // Framing box center shifts ahead of the ship in the direction of velocity
       expect(frame.framingBox.centerX, greaterThan(500.0));
       expect(frame.framingBox.centerY, lessThan(-200.0));
+      // First lock initializes camera directly to framing center instead of easing from origin
+      expect(frame.cameraX, closeTo(frame.framingBox.centerX, 1e-6));
+      expect(frame.cameraY, closeTo(frame.framingBox.centerY, 1e-6));
     });
   });
 }
