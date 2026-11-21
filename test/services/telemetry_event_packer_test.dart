@@ -438,7 +438,7 @@ void main() {
       }
 
       // Verify squad positions are recorded in world coordinate space (tacticalRTS.positionOf)
-      await mvpGame.tacticalRTS.onLoad();
+      await mvpGame.ready();
       mvpGame.playerShip.position.x += 300.0 * 0.05;
       mvpGame.update(0.05);
 
