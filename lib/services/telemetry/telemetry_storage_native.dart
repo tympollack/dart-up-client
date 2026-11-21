@@ -5,9 +5,10 @@
 // local documents / support directory.
 //
 // Stores each pending recap in its own atomically replaced per-match file
-// (`recap_<safeMatchId>.json`) and serializes mutations per directory path so
-// concurrent flushes and End Match saves across separate store instances never
-// overwrite or lose each other's recaps.
+// (`recap_<safeMatchId>.json`), keeps an in-memory fallback queue if disk
+// writes fail, and serializes mutations per directory path so concurrent
+// flushes and End Match saves across separate store instances never overwrite
+// or lose each other's recaps.
 // =============================================================================
 
 import 'dart:async';
@@ -35,6 +36,11 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
   /// the same directory path serialize cleanly.
   static final Map<String, Future<void>> _directoryLocks =
       <String, Future<void>>{};
+
+  /// In-memory fallback records retained when a disk write fails so same-session
+  /// `loadPendingRecords` / `flushPendingQueue` calls can still retry them.
+  final Map<String, CachedTelemetryRecord> _memoryFallback =
+      <String, CachedTelemetryRecord>{};
 
   Future<T> _withDirectoryLock<T>(Future<T> Function() action) {
     final Future<void> previous =
@@ -65,6 +71,22 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
     return base64Url.encode(bytes).replaceAll('=', '');
   }
 
+  static bool _isRecapNamespaceFileName(String fileName) {
+    if (fileName == 'pending_telemetry_queue.json' ||
+        fileName == 'pending_telemetry_queue.json.tmp') {
+      return true;
+    }
+    return fileName.startsWith('recap_') &&
+        (fileName.endsWith('.json') || fileName.endsWith('.json.tmp'));
+  }
+
+  static String _baseName(String path) {
+    final int sep = path.lastIndexOf(Platform.pathSeparator);
+    final int fwd = path.lastIndexOf('/');
+    final int idx = sep > fwd ? sep : fwd;
+    return idx >= 0 ? path.substring(idx + 1) : path;
+  }
+
   File _recordFileForMatch(String matchId) {
     final String safeName = _sanitizeMatchId(matchId);
     return File(
@@ -79,6 +101,7 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
   @override
   Future<bool> savePendingRecord(CachedTelemetryRecord record) {
     return _withDirectoryLock<bool>(() async {
+      _memoryFallback[record.matchId] = record;
       try {
         final dir = Directory(_directoryPath);
         if (!await dir.exists()) {
@@ -102,7 +125,7 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
   Future<List<CachedTelemetryRecord>> loadPendingRecords() {
     return _withDirectoryLock<List<CachedTelemetryRecord>>(() async {
       final Map<String, CachedTelemetryRecord> records =
-          <String, CachedTelemetryRecord>{};
+          <String, CachedTelemetryRecord>{..._memoryFallback};
 
       // 1. Read legacy shared file if present
       final legacy = _legacyQueueFile;
@@ -129,20 +152,21 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
       final dir = Directory(_directoryPath);
       if (await dir.exists()) {
         await for (final entity in dir.list(followLinks: false)) {
-          if (entity is File &&
-              entity.path.endsWith('.json') &&
-              !entity.path.endsWith('pending_telemetry_queue.json')) {
-            try {
-              final String raw = await entity.readAsString();
-              if (raw.trim().isEmpty) continue;
-              final dynamic decoded = jsonDecode(raw);
-              if (decoded is Map<String, dynamic>) {
-                final rec = CachedTelemetryRecord.fromJson(decoded);
-                if (rec.matchId.isNotEmpty) {
-                  records[rec.matchId] = rec;
+          if (entity is File) {
+            final String name = _baseName(entity.path);
+            if (name.startsWith('recap_') && name.endsWith('.json')) {
+              try {
+                final String raw = await entity.readAsString();
+                if (raw.trim().isEmpty) continue;
+                final dynamic decoded = jsonDecode(raw);
+                if (decoded is Map<String, dynamic>) {
+                  final rec = CachedTelemetryRecord.fromJson(decoded);
+                  if (rec.matchId.isNotEmpty) {
+                    records[rec.matchId] = rec;
+                  }
                 }
-              }
-            } catch (_) {}
+              } catch (_) {}
+            }
           }
         }
       }
@@ -156,6 +180,8 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
   @override
   Future<void> removePendingRecord(String matchId) {
     return _withDirectoryLock<void>(() async {
+      _memoryFallback.remove(matchId);
+
       final File targetFile = _recordFileForMatch(matchId);
       if (await targetFile.exists()) {
         try {
@@ -163,22 +189,31 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
         } catch (_) {}
       }
 
-      // Also clean from legacy file if present
+      // Also clean from legacy file if present, ONLY rewriting if `matchId` was
+      // actually present in the legacy list, using atomic temp rename.
       final legacy = _legacyQueueFile;
       if (await legacy.exists()) {
         try {
           final String raw = await legacy.readAsString();
           final dynamic decoded = jsonDecode(raw);
           if (decoded is List) {
+            final int beforeCount = decoded.length;
             final filtered = decoded
                 .where((item) =>
                     item is Map<String, dynamic> &&
                     item['match_id']?.toString() != matchId)
                 .toList();
-            if (filtered.isEmpty) {
-              await legacy.delete();
-            } else {
-              await legacy.writeAsString(jsonEncode(filtered), flush: true);
+            if (filtered.length != beforeCount) {
+              if (filtered.isEmpty) {
+                await legacy.delete();
+              } else {
+                final File legacyTmp = File('${legacy.path}.tmp');
+                await legacyTmp.writeAsString(
+                  jsonEncode(filtered),
+                  flush: true,
+                );
+                await legacyTmp.rename(legacy.path);
+              }
             }
           }
         } catch (_) {}
@@ -189,11 +224,12 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
   @override
   Future<void> clearAll() {
     return _withDirectoryLock<void>(() async {
+      _memoryFallback.clear();
       final dir = Directory(_directoryPath);
       if (!await dir.exists()) return;
       await for (final entity in dir.list(followLinks: false)) {
         if (entity is File &&
-            (entity.path.endsWith('.json') || entity.path.endsWith('.tmp'))) {
+            _isRecapNamespaceFileName(_baseName(entity.path))) {
           try {
             await entity.delete();
           } catch (_) {}

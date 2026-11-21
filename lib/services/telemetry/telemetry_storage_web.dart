@@ -230,6 +230,29 @@ class WebIndexedDbTelemetryOfflineStore implements TelemetryOfflineStore {
   void _removeRecordFromLocalStorage(String matchId) {
     try {
       web.window.localStorage.removeItem(_storageKeyForMatch(matchId));
+      final String? legacyRaw =
+          web.window.localStorage.getItem(_legacyQueueKey);
+      if (legacyRaw != null && legacyRaw.isNotEmpty) {
+        final dynamic decoded = jsonDecode(legacyRaw);
+        if (decoded is List) {
+          final int beforeLen = decoded.length;
+          final filtered = decoded
+              .where((item) =>
+                  item is Map<String, dynamic> &&
+                  item['match_id']?.toString() != matchId)
+              .toList();
+          if (filtered.length != beforeLen) {
+            if (filtered.isEmpty) {
+              web.window.localStorage.removeItem(_legacyQueueKey);
+            } else {
+              web.window.localStorage.setItem(
+                _legacyQueueKey,
+                jsonEncode(filtered),
+              );
+            }
+          }
+        }
+      }
     } catch (_) {}
   }
 

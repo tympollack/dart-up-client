@@ -116,7 +116,8 @@ Uint8List lzDecode(Uint8List compressedBytes) {
 // ---------------------------------------------------------------------------
 
 /// Decompresses an RFC 1950 zlib stream (`CMF`, `FLG`, DEFLATE blocks, Adler32)
-/// in pure Dart with zero native/dart:io dependencies.
+/// in pure Dart with zero native/dart:io dependencies, verifying the big-endian
+/// Adler-32 trailer checksum.
 Uint8List pureDartZlibInflate(Uint8List data) {
   if (data.length < 6) {
     throw const FormatException('Invalid zlib stream: too short.');
@@ -128,7 +129,33 @@ Uint8List pureDartZlibInflate(Uint8List data) {
   }
   final bool fdict = (flg & 0x20) != 0;
   final int deflateStart = fdict ? 6 : 2;
-  return _inflateDeflateStream(data, deflateStart, data.length - 4);
+  final int trailerStart = data.length - 4;
+  final Uint8List inflated =
+      _inflateDeflateStream(data, deflateStart, trailerStart);
+
+  final int expectedAdler = ((data[trailerStart] & 0xFF) << 24) |
+      ((data[trailerStart + 1] & 0xFF) << 16) |
+      ((data[trailerStart + 2] & 0xFF) << 8) |
+      (data[trailerStart + 3] & 0xFF);
+  final int actualAdler = computeAdler32(inflated);
+  if ((actualAdler & 0xFFFFFFFF) != (expectedAdler & 0xFFFFFFFF)) {
+    throw FormatException(
+      'Zlib Adler-32 checksum mismatch (expected 0x${expectedAdler.toRadixString(16)}, got 0x${actualAdler.toRadixString(16)}).',
+    );
+  }
+  return inflated;
+}
+
+/// Computes the RFC 1950 Adler-32 checksum of [bytes].
+int computeAdler32(Uint8List bytes) {
+  const int modAdler = 65521;
+  int s1 = 1;
+  int s2 = 0;
+  for (int i = 0; i < bytes.length; i++) {
+    s1 = (s1 + bytes[i]) % modAdler;
+    s2 = (s2 + s1) % modAdler;
+  }
+  return ((s2 << 16) | s1) & 0xFFFFFFFF;
 }
 
 const List<int> _kLengthBase = <int>[

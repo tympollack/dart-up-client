@@ -164,43 +164,28 @@ class StarDartMVP extends FlameGame with TapCallbacks {
         hull: playerShip.hull,
       );
 
-      // Record tactical RTS squad units and turret combat engagements
+      // Record tactical RTS squad units in world coordinate space
       for (int i = 0; i < tacticalRTS.squadUnits.length; i++) {
         final unit = tacticalRTS.squadUnits[i];
         final int unitEntityId = i + 2;
+        final Vector2 worldPos = tacticalRTS.positionOf(unit.position);
         final prevPos = _prevSquadPositions[unitEntityId];
         final double uVx =
-            prevPos != null ? (unit.position.x - prevPos.x) / divisor : 0.0;
+            prevPos != null ? (worldPos.x - prevPos.x) / divisor : 0.0;
         final double uVy =
-            prevPos != null ? (unit.position.y - prevPos.y) / divisor : 0.0;
+            prevPos != null ? (worldPos.y - prevPos.y) / divisor : 0.0;
         _prevSquadPositions[unitEntityId] = (
-          x: unit.position.x,
-          y: unit.position.y,
+          x: worldPos.x,
+          y: worldPos.y,
         );
         telemetryRingBuffer.recordEntityState(
           entityId: unitEntityId,
-          x: unit.position.x,
-          y: unit.position.y,
+          x: worldPos.x,
+          y: worldPos.y,
           vx: uVx,
           vy: uVy,
           hull: 100.0,
         );
-      }
-
-      for (int t = 0; t < tacticalRTS.turrets.length; t++) {
-        final turret = tacticalRTS.turrets[t];
-        final targetPos = turret.targetPosition;
-        if (targetPos != null) {
-          telemetryRingBuffer.recordWeaponEvent(
-            attackerId: 1,
-            targetId: 3, // hostile squad unit
-            sourceX: turret.position.x,
-            sourceY: turret.position.y,
-            targetX: targetPos.x,
-            targetY: targetPos.y,
-            damage: 12.0,
-          );
-        }
       }
     }
   }

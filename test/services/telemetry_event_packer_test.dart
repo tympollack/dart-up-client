@@ -333,6 +333,14 @@ void main() {
       final nativeZlibCompressed = Uint8List.fromList(zlib.encode(raw));
       final webInflated = web_lz.pureDartZlibInflate(nativeZlibCompressed);
       expect(webInflated, equals(raw));
+
+      // Verify pureDartZlibInflate rejects corrupted Adler-32 trailer checksums
+      final corruptedAdler = Uint8List.fromList(nativeZlibCompressed);
+      corruptedAdler[corruptedAdler.length - 1] ^= 0xFF;
+      expect(
+        () => web_lz.pureDartZlibInflate(corruptedAdler),
+        throwsA(isA<FormatException>()),
+      );
     });
 
     test('Concurrent NativeDiskTelemetryOfflineStore save and remove across instances never lose recaps', () async {
@@ -367,6 +375,13 @@ void main() {
 
       final remaining = await store1.loadPendingRecords();
       expect(remaining.map((r) => r.matchId).toList(), equals(<String>['match_B']));
+
+      // Verify clearAll() only deletes recap-namespaced files and leaves other files intact
+      final unrelatedFile = File('${tempDir.path}${Platform.pathSeparator}user_settings.json');
+      await unrelatedFile.writeAsString('{"theme":"dark"}');
+      await store1.clearAll();
+      expect(await unrelatedFile.exists(), isTrue);
+      expect(await store1.loadPendingRecords(), isEmpty);
     });
 
     test('TelemetryDispatchHook reports cachedOffline=false and savedInMemoryOnly=true when durable storage write fails', () async {
@@ -418,9 +433,20 @@ void main() {
           entitySlot: 0,
           outCursor: cursor,
         );
-        // Every sample after movement starts must report steady ~300 units/s speed
+      // Every sample after movement starts must report steady ~300 units/s speed
         expect(cursor.vx, closeTo(300.0, 2.0));
       }
+
+      // Verify squad positions are recorded in world coordinate space (tacticalRTS.positionOf)
+      final squadUnit = mvpGame.tacticalRTS.squadUnits.first;
+      final expectedWorldPos = mvpGame.tacticalRTS.positionOf(squadUnit.position);
+      mvpGame.telemetryRingBuffer.readEntityAt(
+        chronologicalTickIndex: mvpGame.telemetryRingBuffer.length - 1,
+        entitySlot: 1,
+        outCursor: cursor,
+      );
+      expect(cursor.x, closeTo(expectedWorldPos.x, 0.5));
+      expect(cursor.y, closeTo(expectedWorldPos.y, 0.5));
     });
   });
 }

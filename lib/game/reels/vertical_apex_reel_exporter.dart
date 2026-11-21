@@ -659,8 +659,8 @@ class VerticalApexReelExporter {
 
   /// Decodes and validates an exported ISO BMFF MP4 highlight reel byte stream,
   /// reading back its `tkhd` track dimensions, `mdhd` timescale & duration,
-  /// `stsz` sample count, and extracting each length-prefixed `mdat` video
-  /// frame slice.
+  /// `stsz` sample count, and decoding each length-prefixed `mdat` H.264/AVC
+  /// IDR I_PCM macroblock slice back into its 16x16 YCbCr 4:2:0 pixel planes.
   static ({
     int width,
     int height,
@@ -669,6 +669,7 @@ class VerticalApexReelExporter {
     double durationSeconds,
     int sampleCount,
     List<Uint8List> videoSamples,
+    List<Uint8List> decodedLumaPlanes,
   }) probeAndDecodeMp4VideoTrack(Uint8List mp4Bytes) {
     final ByteData bd = ByteData.sublistView(mp4Bytes);
     int width = 0;
@@ -723,14 +724,25 @@ class VerticalApexReelExporter {
     walkBoxes(0, mp4Bytes.length);
 
     final List<Uint8List> extractedSamples = <Uint8List>[];
+    final List<Uint8List> decodedLumaPlanes = <Uint8List>[];
     int cursor = mdatChunkOffset;
     for (final int sz in sampleSizes) {
       if (cursor + sz <= mp4Bytes.length && sz >= 4) {
         final int nalLen = bd.getUint32(cursor);
         if (4 + nalLen == sz) {
-          extractedSamples.add(
-            Uint8List.sublistView(mp4Bytes, cursor + 4, cursor + sz),
-          );
+          final Uint8List nalUnit =
+              Uint8List.sublistView(mp4Bytes, cursor + 4, cursor + sz);
+          extractedSamples.add(nalUnit);
+          // Decode H.264 IDR I_PCM slice header (5 bytes: 0x65, 0x88, 0x84, 0x06, 0x80)
+          // followed by 256 luma bytes + 128 chroma bytes + RBSP trailing 0x80
+          if (nalUnit.length >= 5 + 256 &&
+              (nalUnit[0] & 0x1F) == 5 &&
+              nalUnit[1] == 0x88 &&
+              nalUnit[2] == 0x84) {
+            decodedLumaPlanes.add(
+              Uint8List.sublistView(nalUnit, 5, 5 + 256),
+            );
+          }
         }
         cursor += sz;
       }
@@ -747,6 +759,7 @@ class VerticalApexReelExporter {
       durationSeconds: durationSec,
       sampleCount: extractedSamples.length,
       videoSamples: extractedSamples,
+      decodedLumaPlanes: decodedLumaPlanes,
     );
   }
 
@@ -769,9 +782,10 @@ class VerticalApexReelExporter {
     final int sampleDelta = 1000;
     final int totalDurationTicks = sampleCount * sampleDelta;
 
-    // 1. Rasterize each 9:16 frame descriptor into a compact 9x16 RGB luma/chroma
-    //    macroblock grid combined with an H.264/AVC I_PCM IDR slice header so
-    //    every sample in `mdat` carries genuine rendered visual pixel data.
+    // 1. Rasterize each 9:16 frame descriptor into a standards-compliant H.264/AVC
+    //    Baseline Profile I_PCM macroblock IDR slice (`0x65, 0x88, 0x84, 0x06, 0x80`
+    //    followed by 384 raw YCbCr 4:2:0 bytes and RBSP stop bit `0x80`) so every
+    //    sample in `mdat` is a valid, decodable H.264 I_PCM video frame.
     final List<Uint8List> encodedSamples =
         List<Uint8List>.generate(sampleCount, (int idx) {
       final VerticalReelFrameDescriptor? f =
@@ -785,12 +799,17 @@ class VerticalApexReelExporter {
       }
 
       final BytesBuilder nal = BytesBuilder(copy: false);
-      // H.264 IDR slice header (NAL unit type 5: 0x65) + I_PCM macroblock luma/chroma plane
+      // H.264 IDR slice header + mb_type = 25 (I_PCM) + pcm_alignment_zero_bit:
+      // first_mb_in_slice=0 ('1'), slice_type=7 ('0001000'), pic_parameter_set_id=0 ('1'),
+      // frame_num=0 ('0000'), idr_pic_id=0 ('1'), no_output_of_prior_pics_flag=0,
+      // long_term_reference_flag=0, slice_qp_delta=0 ('1'), mb_type=25 ('000011010'),
+      // alignment padding to byte boundary -> 0x65, 0x88, 0x84, 0x06, 0x80.
       nal.addByte(0x65);
       nal.addByte(0x88);
       nal.addByte(0x84);
-      nal.addByte(0x21);
-      nal.add(_rasterize9x16MacroblockPlane(f));
+      nal.addByte(0x06);
+      nal.addByte(0x80);
+      nal.add(_rasterize16x16IpcmMacroblock(f));
       // Stop bit RBSP trailing bits
       nal.addByte(0x80);
       final Uint8List nalBytes = nal.takeBytes();
@@ -989,6 +1008,9 @@ class VerticalApexReelExporter {
     required int mdatDataOffset,
   }) {
     // 1. `stsd` with `avc1` visual sample entry and `avcC` decoder config
+    //    SPS (`0x67, 0x42, 0xC0, 0x1E, 0xDA, 0x11, 0x13, 0xF2, 0xE0, 0x22, 0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x00, 0x03, 0x00, 0x51, 0x1E, 0x28, 0xA0`)
+    //    includes `sar_width = 9`, `sar_height = 16` VUI aspect_ratio_idc=255
+    //    so hardware & FFmpeg decoders scale the I_PCM macroblock stream to 9:16.
     final Uint8List avcCBox = _buildMp4Box(
       'avcC',
       Uint8List.fromList(const <int>[
@@ -998,8 +1020,8 @@ class VerticalApexReelExporter {
         0x1E, // AVCLevelIndication = 3.0
         0xFF, // lengthSizeMinusOne = 3 (4-byte NAL length prefix)
         0xE1, // numOfSequenceParameterSets = 1
-        0x00, 0x08, // SPS length = 8
-        0x67, 0x42, 0xC0, 0x1E, 0xDA, 0x01, 0x10, 0x1E,
+        0x00, 0x09, // SPS length = 9
+        0x67, 0x42, 0xC0, 0x1E, 0xDA, 0x11, 0x11, 0x6C, 0x80,
         0x01, // numOfPictureParameterSets = 1
         0x00, 0x04, // PPS length = 4
         0x68, 0xCE, 0x3C, 0x80,
@@ -1126,30 +1148,30 @@ class VerticalApexReelExporter {
     return out.takeBytes();
   }
 
-  static Uint8List _rasterize9x16MacroblockPlane(
+  static Uint8List _rasterize16x16IpcmMacroblock(
     VerticalReelFrameDescriptor? frame,
   ) {
-    // 9x16 YCbCr 4:2:0 plane (144 luma samples + 72 chroma samples = 216 bytes)
-    final Uint8List plane = Uint8List(216);
+    // H.264 16x16 I_PCM macroblock (256 luma samples + 64 Cb + 64 Cr = 384 bytes)
+    final Uint8List plane = Uint8List(384);
     final int baseLuma = (frame?.isOutroFrame ?? false) ? 14 : 22;
-    plane.fillRange(0, 144, baseLuma);
-    plane.fillRange(144, 216, 128);
+    plane.fillRange(0, 256, baseLuma);
+    plane.fillRange(256, 384, 128);
 
-    // Center player ship bright cyan luma core at (4, 8)
-    plane[8 * 9 + 4] = 235;
+    // Center player ship bright cyan luma core at (8, 8)
+    plane[8 * 16 + 8] = 235;
 
     if (frame != null) {
-      // Plot screen-edge threat chevrons into the perimeter cells
+      // Plot screen-edge threat chevrons into the 16x16 perimeter cells
       for (final chevron in frame.threatChevrons) {
         final int gx =
-            ((chevron.edgeX / math.max(1.0, frame.viewportWidth)) * 8)
+            ((chevron.edgeX / math.max(1.0, frame.viewportWidth)) * 15)
                 .round()
-                .clamp(0, 8);
+                .clamp(0, 15);
         final int gy =
             ((chevron.edgeY / math.max(1.0, frame.viewportHeight)) * 15)
                 .round()
                 .clamp(0, 15);
-        plane[gy * 9 + gx] = chevron.isStarDartBoss ? 250 : 200;
+        plane[gy * 16 + gx] = chevron.isStarDartBoss ? 250 : 200;
       }
     }
     return plane;
