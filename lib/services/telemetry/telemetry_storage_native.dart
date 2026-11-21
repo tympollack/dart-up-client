@@ -37,10 +37,17 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
   static final Map<String, Future<void>> _directoryLocks =
       <String, Future<void>>{};
 
-  /// In-memory fallback records retained when a disk write fails so same-session
-  /// `loadPendingRecords` / `flushPendingQueue` calls can still retry them.
-  final Map<String, CachedTelemetryRecord> _memoryFallback =
-      <String, CachedTelemetryRecord>{};
+  /// Process-wide in-memory fallback records keyed by directory path and matchId,
+  /// retained ONLY when a disk write fails so same-session `loadPendingRecords`
+  /// calls can still retry them.
+  static final Map<String, Map<String, CachedTelemetryRecord>>
+      _memoryFallbacksByDir = <String, Map<String, CachedTelemetryRecord>>{};
+
+  Map<String, CachedTelemetryRecord> get _memoryFallback =>
+      _memoryFallbacksByDir.putIfAbsent(
+        _directoryPath,
+        () => <String, CachedTelemetryRecord>{},
+      );
 
   Future<T> _withDirectoryLock<T>(Future<T> Function() action) {
     final Future<void> previous =
@@ -101,7 +108,6 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
   @override
   Future<bool> savePendingRecord(CachedTelemetryRecord record) {
     return _withDirectoryLock<bool>(() async {
-      _memoryFallback[record.matchId] = record;
       try {
         final dir = Directory(_directoryPath);
         if (!await dir.exists()) {
@@ -114,8 +120,10 @@ class NativeDiskTelemetryOfflineStore implements TelemetryOfflineStore {
           flush: true,
         );
         await tempFile.rename(targetFile.path);
+        _memoryFallback.remove(record.matchId);
         return true;
       } catch (_) {
+        _memoryFallback[record.matchId] = record;
         return false;
       }
     });
