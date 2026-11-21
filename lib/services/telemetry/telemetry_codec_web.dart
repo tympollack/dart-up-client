@@ -1,22 +1,32 @@
 // =============================================================================
 // telemetry_codec_web.dart
 //
-// Web-safe pure-Dart LZ77/RLE codec fallback when dart:io is unavailable.
+// Web-safe pure-Dart LZ77/RLE codec + pure-Dart zlib/DEFLATE decoder so web and
+// native archives unpack identically across both platforms.
 // =============================================================================
 
 import 'dart:typed_data';
 
-Uint8List platformZlibEncode(Uint8List rawBytes) {
-  // Pure-Dart lossless LZ77 + RLE byte compressor for web builds
+Uint8List platformZlibEncode(Uint8List rawBytes) => lzEncode(rawBytes);
+
+Uint8List platformZlibDecode(Uint8List compressedBytes) {
+  if (compressedBytes.length >= 2 &&
+      compressedBytes[0] == 0x4C &&
+      compressedBytes[1] == 0x5A) {
+    return lzDecode(compressedBytes);
+  }
+  return compressedBytes;
+}
+
+/// Pure-Dart lossless LZ77 + RLE byte compressor (magic header `0x4C, 0x5A` = `'LZ'`).
+Uint8List lzEncode(Uint8List rawBytes) {
   final BytesBuilder out = BytesBuilder(copy: false);
-  // Header magic: 'LZ'
   out.addByte(0x4C);
   out.addByte(0x5A);
 
   int i = 0;
   final int len = rawBytes.length;
   while (i < len) {
-    // Look back up to 255 bytes for a matching run of up to 127 bytes
     int bestOffset = 0;
     int bestLength = 0;
     final int maxBack = i < 255 ? i : 255;
@@ -43,7 +53,6 @@ Uint8List platformZlibEncode(Uint8List rawBytes) {
       final int litStart = i;
       int litLen = 0;
       while (litLen < 127 && i < len) {
-        // Check if a 4-byte match starts here
         bool foundMatch = false;
         final int mb = i < 255 ? i : 255;
         for (int back = 1; back <= mb; back++) {
@@ -68,7 +77,8 @@ Uint8List platformZlibEncode(Uint8List rawBytes) {
   return out.takeBytes();
 }
 
-Uint8List platformZlibDecode(Uint8List compressedBytes) {
+/// Pure-Dart lossless LZ77 + RLE byte decompressor.
+Uint8List lzDecode(Uint8List compressedBytes) {
   if (compressedBytes.length < 2 ||
       compressedBytes[0] != 0x4C ||
       compressedBytes[1] != 0x5A) {

@@ -101,6 +101,7 @@ class DartUpGame extends FlameGame with TapCallbacks {
   final Set<String> _matchUnlockedFeatIds = {};
   double _prevSampledPlayerX = 0.0;
   double _prevSampledPlayerY = 0.0;
+  bool _hasSampledInitialPlayerPosition = false;
 
   // ---- Components ----
   late final PlayerShipComponent shipComponent;
@@ -200,6 +201,9 @@ class DartUpGame extends FlameGame with TapCallbacks {
       size: Vector2(48, 48),
       position: size / 2, // screen center -- adjust to your layout
     );
+    _prevSampledPlayerX = shipComponent.basePosition.x;
+    _prevSampledPlayerY = shipComponent.basePosition.y;
+    _hasSampledInitialPlayerPosition = true;
 
     // ---- Celestial nodes ----------------------------------------------
     nodeManager = CelestialNodeManager();
@@ -455,10 +459,15 @@ class DartUpGame extends FlameGame with TapCallbacks {
 
     if (telemetryRingBuffer.advanceSampleClock(dt)) {
       final double interval = telemetryRingBuffer.sampleIntervalSeconds;
-      final double vx = (playerX - _prevSampledPlayerX) / interval;
-      final double vy = (playerY - _prevSampledPlayerY) / interval;
+      final double vx = _hasSampledInitialPlayerPosition
+          ? (playerX - _prevSampledPlayerX) / interval
+          : 0.0;
+      final double vy = _hasSampledInitialPlayerPosition
+          ? (playerY - _prevSampledPlayerY) / interval
+          : 0.0;
       _prevSampledPlayerX = playerX;
       _prevSampledPlayerY = playerY;
+      _hasSampledInitialPlayerPosition = true;
 
       telemetryRingBuffer.beginTick(
         timestamp: shipWarpController.simulationTime,

@@ -99,7 +99,7 @@ class TelemetryDispatchHook {
 
     final String requestBody = jsonEncode(<String, Object?>{
       'match_id': matchId,
-      'format': 'dtrp_v1',
+      'format': TelemetryEventPacker.detectPayloadFormatLabel(packedPayload),
       'byte_length': packedPayload.length,
       'payload_base64': base64Encode(packedPayload),
     });

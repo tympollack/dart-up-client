@@ -381,6 +381,11 @@ class TelemetryEventPacker {
 
     final Uint8List rawDeltaBytes = deltaStream.takeBytes();
     final Uint8List compressedPayload = platformZlibEncode(rawDeltaBytes);
+    final int codecFlag = (compressedPayload.length >= 2 &&
+            compressedPayload[0] == 0x4C &&
+            compressedPayload[1] == 0x5A)
+        ? 0x02 // LZ77/RLE codec
+        : 0x01; // ZLIB codec
 
     final BytesBuilder envelope = BytesBuilder(copy: false);
     envelope.addByte(_magic0);
@@ -388,15 +393,30 @@ class TelemetryEventPacker {
     envelope.addByte(_magic2);
     envelope.addByte(_magic3);
     envelope.addByte(_formatVersion);
+    envelope.addByte(codecFlag);
     envelope.add(compressedPayload);
     return envelope.takeBytes();
+  }
+
+  /// Inspects the packed header and returns `'dtrp_v1_lz'` or `'dtrp_v1_zlib'`.
+  static String detectPayloadFormatLabel(Uint8List packedBytes) {
+    if (packedBytes.length >= 6 &&
+        packedBytes[0] == _magic0 &&
+        packedBytes[1] == _magic1 &&
+        packedBytes[2] == _magic2 &&
+        packedBytes[3] == _magic3) {
+      final int codecFlag = packedBytes[5];
+      if (codecFlag == 0x02) return 'dtrp_v1_lz';
+      if (codecFlag == 0x01) return 'dtrp_v1_zlib';
+    }
+    return 'dtrp_v1';
   }
 
   /// Unpacks a compressed binary payload produced by [pack] back into a
   /// [TelemetryReplayArchive] with exact quantized entity coordinates and
   /// event timestamps.
   static TelemetryReplayArchive unpack(Uint8List packedBytes) {
-    if (packedBytes.length < 6 ||
+    if (packedBytes.length < 7 ||
         packedBytes[0] != _magic0 ||
         packedBytes[1] != _magic1 ||
         packedBytes[2] != _magic2 ||
@@ -413,8 +433,10 @@ class TelemetryEventPacker {
       );
     }
 
+    final int codecFlag = packedBytes[5];
+    final int payloadStart = (codecFlag == 0x01 || codecFlag == 0x02) ? 6 : 5;
     final Uint8List compressedSlice =
-        Uint8List.sublistView(packedBytes, 5, packedBytes.length);
+        Uint8List.sublistView(packedBytes, payloadStart, packedBytes.length);
     final Uint8List rawDeltaBytes = platformZlibDecode(compressedSlice);
     final _VarintReader reader = _VarintReader(rawDeltaBytes);
 
