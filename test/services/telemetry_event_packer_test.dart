@@ -403,12 +403,10 @@ void main() {
       await mvpGame.onLoad();
       mvpGame.onMount();
 
-      // Command ship to move right at constant 300 units/s
-      mvpGame.playerShip.setTarget(Vector2(5000, 0));
-
       // Step at 30 FPS (dt = 1/30 = 0.033333s) for 10 frames (~0.33s)
       const double dt30 = 1.0 / 30.0;
       for (int f = 0; f < 10; f++) {
+        mvpGame.playerShip.position.x = (f + 1) * 300.0 * dt30;
         mvpGame.update(dt30);
       }
 
