@@ -2,6 +2,8 @@ import 'dart:math';
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 
+import '../../services/asset_registry_service.dart';
+
 /// Defensive combat turret matching Kenney Sci-Fi RTS specifications.
 /// Dynamically tracks and rotates toward target unit coordinates.
 class DefensiveTurretComponent extends PositionComponent {
@@ -29,6 +31,9 @@ class DefensiveTurretComponent extends PositionComponent {
   void setTarget(Vector2? target) {
     targetPosition = target;
   }
+
+  String get resolvedAssetUrl =>
+      AssetRegistryService.instance.resolveEntityAssetUrl('turret-defensive');
 
   @override
   void update(double dt) {

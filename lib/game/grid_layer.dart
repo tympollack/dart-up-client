@@ -2,6 +2,8 @@ import 'dart:math';
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 
+import '../services/asset_registry_service.dart';
+
 /// Axial and cube coordinate representation for tactical hex grids.
 class HexCoord {
   final int q;
@@ -133,6 +135,9 @@ extension HexTerrainProps on HexTerrainType {
         return const Color(0xFF10B981);
     }
   }
+
+  String get assetTileKey => AssetRegistryService.instance.terrainTileKeyFor(this);
+  String get assetCdnUrl => AssetRegistryService.instance.resolveTerrainAssetUrl(this);
 }
 
 /// Single tile in tactical grid

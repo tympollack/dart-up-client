@@ -2,6 +2,8 @@ import 'dart:math';
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 
+import '../../services/asset_registry_service.dart';
+
 /// Heavy Resource Harvester matching Kenney Sci-Fi RTS specifications.
 /// Extracts minerals/crystals and stores cargo with visual extraction laser pulses.
 class ResourceHarvesterComponent extends PositionComponent {
@@ -32,6 +34,9 @@ class ResourceHarvesterComponent extends PositionComponent {
       currentCargo = (currentCargo + 4.0 * dt).clamp(0.0, cargoCapacity);
     }
   }
+
+  String get resolvedAssetUrl =>
+      AssetRegistryService.instance.resolveEntityAssetUrl('harvester-crawler');
 
   @override
   void render(Canvas canvas) {

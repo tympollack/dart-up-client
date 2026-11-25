@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'entities/entities.dart';
 import 'grid_layer.dart';
+import '../services/asset_registry_service.dart';
 
 /// Complete tactical RTS game subsystem integrating hex terrain,
 /// logistics tether power networks, defensive turrets, harvesters, and squad units.
@@ -31,6 +32,7 @@ class TacticalRTSComponent extends PositionComponent with TapCallbacks {
   @override
   Future<void> onLoad() async {
     await super.onLoad();
+    await AssetRegistryService.instance.hydrateCatalog();
 
     // 1. Grid terrain & logistics tethers
     gridComponent = HexGridComponent(grid: grid);

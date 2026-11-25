@@ -2,6 +2,8 @@ import 'dart:math';
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 
+import '../../services/asset_registry_service.dart';
+
 /// Combat Squad Unit matching Kenney Sci-Fi RTS specifications.
 /// Navigates cleanly through waypoints produced by grid pathfinding.
 class SquadUnitComponent extends PositionComponent {
@@ -54,6 +56,11 @@ class SquadUnitComponent extends PositionComponent {
     waypoints.clear();
     _currentWaypointIndex = 0;
     isMoving = false;
+  }
+
+  String get resolvedAssetUrl {
+    final slug = unitName.trim().toLowerCase().replaceAll(' ', '-');
+    return AssetRegistryService.instance.resolveEntityAssetUrl('squad-$slug');
   }
 
   @override
