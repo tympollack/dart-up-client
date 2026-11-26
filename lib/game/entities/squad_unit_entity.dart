@@ -1,6 +1,10 @@
+import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
+
+import '../../services/asset_registry_service.dart';
 
 /// Combat Squad Unit matching Kenney Sci-Fi RTS specifications.
 /// Navigates cleanly through waypoints produced by grid pathfinding.
@@ -17,6 +21,7 @@ class SquadUnitComponent extends PositionComponent {
   double health = 100.0;
   double maxHealth = 100.0;
   double _exhaustTimer = 0.0;
+  ui.Image? _spriteImage;
 
   SquadUnitComponent({
     required Vector2 position,
@@ -29,6 +34,33 @@ class SquadUnitComponent extends PositionComponent {
           size: Vector2(36, 36),
           anchor: Anchor.center,
         );
+
+  Future<void> _loadSprite() async {
+    final loaded = await AssetRegistryService.instance.loadCdnImage(
+      resolvedAssetUrl,
+      timeout: const Duration(seconds: 2),
+    );
+    if (loaded != null) {
+      _spriteImage = loaded;
+    }
+  }
+
+  void _handleSwapRevision() {
+    unawaited(_loadSprite());
+  }
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+    AssetRegistryService.instance.swapRevision.addListener(_handleSwapRevision);
+    await _loadSprite();
+  }
+
+  @override
+  void onRemove() {
+    AssetRegistryService.instance.swapRevision.removeListener(_handleSwapRevision);
+    super.onRemove();
+  }
 
   /// Assign a new sequence of waypoints for path navigation
   void setWaypoints(List<Vector2> newWaypoints) {
@@ -54,6 +86,11 @@ class SquadUnitComponent extends PositionComponent {
     waypoints.clear();
     _currentWaypointIndex = 0;
     isMoving = false;
+  }
+
+  String get resolvedAssetUrl {
+    final slug = unitName.trim().toLowerCase().replaceAll(' ', '-');
+    return AssetRegistryService.instance.resolveEntityAssetUrl('squad-$slug');
   }
 
   @override
@@ -118,6 +155,20 @@ class SquadUnitComponent extends PositionComponent {
 
     final double halfW = size.x / 2.0;
     final double halfH = size.y / 2.0;
+
+    if (_spriteImage != null) {
+      canvas.save();
+      canvas.translate(halfW, halfH);
+      canvas.rotate(heading);
+      canvas.drawImageRect(
+        _spriteImage!,
+        Rect.fromLTWH(0, 0, _spriteImage!.width.toDouble(), _spriteImage!.height.toDouble()),
+        Rect.fromCenter(center: Offset.zero, width: size.x, height: size.y),
+        Paint(),
+      );
+      canvas.restore();
+      return;
+    }
 
     canvas.save();
     canvas.translate(halfW, halfH);

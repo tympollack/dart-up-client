@@ -1,9 +1,11 @@
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'entities/entities.dart';
 import 'grid_layer.dart';
+import '../services/asset_registry_service.dart';
 
 /// Complete tactical RTS game subsystem integrating hex terrain,
 /// logistics tether power networks, defensive turrets, harvesters, and squad units.
@@ -31,6 +33,13 @@ class TacticalRTSComponent extends PositionComponent with TapCallbacks {
   @override
   Future<void> onLoad() async {
     await super.onLoad();
+    SupabaseClient? client;
+    try {
+      client = Supabase.instance.client;
+    } catch (_) {
+      client = null;
+    }
+    await AssetRegistryService.instance.hydrateCatalog(supabaseClient: client);
 
     // 1. Grid terrain & logistics tethers
     gridComponent = HexGridComponent(grid: grid);
