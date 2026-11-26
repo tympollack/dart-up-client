@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 
@@ -12,6 +14,7 @@ class ResourceHarvesterComponent extends PositionComponent {
   double currentCargo;
   bool isHarvesting;
   double _pulseTimer = 0.0;
+  ui.Image? _spriteImage;
 
   ResourceHarvesterComponent({
     required Vector2 position,
@@ -24,6 +27,33 @@ class ResourceHarvesterComponent extends PositionComponent {
           size: Vector2(40, 40),
           anchor: Anchor.center,
         );
+
+  Future<void> _loadSprite() async {
+    final loaded = await AssetRegistryService.instance.loadCdnImage(
+      resolvedAssetUrl,
+      timeout: const Duration(seconds: 2),
+    );
+    if (loaded != null) {
+      _spriteImage = loaded;
+    }
+  }
+
+  void _handleSwapRevision() {
+    unawaited(_loadSprite());
+  }
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+    AssetRegistryService.instance.swapRevision.addListener(_handleSwapRevision);
+    await _loadSprite();
+  }
+
+  @override
+  void onRemove() {
+    AssetRegistryService.instance.swapRevision.removeListener(_handleSwapRevision);
+    super.onRemove();
+  }
 
   @override
   void update(double dt) {
@@ -41,6 +71,16 @@ class ResourceHarvesterComponent extends PositionComponent {
   @override
   void render(Canvas canvas) {
     super.render(canvas);
+
+    if (_spriteImage != null) {
+      canvas.drawImageRect(
+        _spriteImage!,
+        Rect.fromLTWH(0, 0, _spriteImage!.width.toDouble(), _spriteImage!.height.toDouble()),
+        Rect.fromLTWH(0, 0, size.x, size.y),
+        Paint(),
+      );
+      return;
+    }
 
     final double halfW = size.x / 2.0;
 

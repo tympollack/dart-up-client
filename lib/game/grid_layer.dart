@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 
@@ -307,10 +309,51 @@ class _PathNode {
 class HexGridComponent extends PositionComponent {
   final TacticalHexGrid grid;
   double _animationTimer = 0.0;
+  ui.Image? _isoAtlasImage;
+  final Map<HexTerrainType, ui.Image> _terrainSprites = {};
 
   HexGridComponent({
     required this.grid,
   });
+
+  Future<void> _loadSprites() async {
+    final registry = AssetRegistryService.instance;
+    final atlasUrl = registry.resolveIsometricAtlasUrl();
+    final atlas = await registry.loadCdnImage(
+      atlasUrl,
+      timeout: const Duration(seconds: 2),
+    );
+    if (atlas != null) {
+      _isoAtlasImage = atlas;
+    }
+
+    await Future.wait(HexTerrainType.values.map((terrain) async {
+      final img = await registry.loadCdnImage(
+        registry.resolveTerrainAssetUrl(terrain),
+        timeout: const Duration(seconds: 2),
+      );
+      if (img != null) {
+        _terrainSprites[terrain] = img;
+      }
+    }));
+  }
+
+  void _handleSwapRevision() {
+    unawaited(_loadSprites());
+  }
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+    AssetRegistryService.instance.swapRevision.addListener(_handleSwapRevision);
+    await _loadSprites();
+  }
+
+  @override
+  void onRemove() {
+    AssetRegistryService.instance.swapRevision.removeListener(_handleSwapRevision);
+    super.onRemove();
+  }
 
   @override
   void update(double dt) {
@@ -351,11 +394,46 @@ class HexGridComponent extends PositionComponent {
     }
     path.close();
 
-    // Base terrain fill
+    // Base terrain fill fallback
     final fillPaint = Paint()
       ..color = tile.terrain.fillColor
       ..style = PaintingStyle.fill;
     canvas.drawPath(path, fillPaint);
+
+    // Draw CDN sprite or isometric tile atlas frame clipped inside hex bounds
+    final sprite = _terrainSprites[tile.terrain];
+    final atlasFrame = AssetRegistryService.instance.resolveTerrainFlameSpriteData(tile.terrain);
+    final dstRect = Rect.fromCenter(
+      center: Offset(center.x, center.y),
+      width: radius * 1.9,
+      height: radius * 1.9,
+    );
+    if (sprite != null) {
+      canvas.save();
+      canvas.clipPath(path);
+      canvas.drawImageRect(
+        sprite,
+        Rect.fromLTWH(0, 0, sprite.width.toDouble(), sprite.height.toDouble()),
+        dstRect,
+        Paint()..colorFilter = const ui.ColorFilter.mode(Color(0xD9FFFFFF), ui.BlendMode.modulate),
+      );
+      canvas.restore();
+    } else if (_isoAtlasImage != null && atlasFrame != null && atlasFrame.srcSize.length == 2) {
+      canvas.save();
+      canvas.clipPath(path);
+      canvas.drawImageRect(
+        _isoAtlasImage!,
+        Rect.fromLTWH(
+          atlasFrame.srcPosition[0],
+          atlasFrame.srcPosition[1],
+          atlasFrame.srcSize[0],
+          atlasFrame.srcSize[1],
+        ),
+        dstRect,
+        Paint()..colorFilter = const ui.ColorFilter.mode(Color(0xD9FFFFFF), ui.BlendMode.modulate),
+      );
+      canvas.restore();
+    }
 
     // Beveled internal stroke
     final innerPath = Path();

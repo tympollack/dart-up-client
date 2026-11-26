@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:math';
+import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flutter/material.dart';
 
@@ -15,6 +17,7 @@ class DefensiveTurretComponent extends PositionComponent {
   double currentHeading = 0.0;
   bool isAcquiringTarget = false;
   double _energyPulseTimer = 0.0;
+  ui.Image? _spriteImage;
 
   DefensiveTurretComponent({
     required Vector2 position,
@@ -26,6 +29,33 @@ class DefensiveTurretComponent extends PositionComponent {
           size: Vector2(44, 44),
           anchor: Anchor.center,
         );
+
+  Future<void> _loadSprite() async {
+    final loaded = await AssetRegistryService.instance.loadCdnImage(
+      resolvedAssetUrl,
+      timeout: const Duration(seconds: 2),
+    );
+    if (loaded != null) {
+      _spriteImage = loaded;
+    }
+  }
+
+  void _handleSwapRevision() {
+    unawaited(_loadSprite());
+  }
+
+  @override
+  Future<void> onLoad() async {
+    await super.onLoad();
+    AssetRegistryService.instance.swapRevision.addListener(_handleSwapRevision);
+    await _loadSprite();
+  }
+
+  @override
+  void onRemove() {
+    AssetRegistryService.instance.swapRevision.removeListener(_handleSwapRevision);
+    super.onRemove();
+  }
 
   /// Point the turret toward a specific world target coordinate
   void setTarget(Vector2? target) {
@@ -75,6 +105,20 @@ class DefensiveTurretComponent extends PositionComponent {
 
     final double halfW = size.x / 2.0;
     final double halfH = size.y / 2.0;
+
+    if (_spriteImage != null) {
+      canvas.save();
+      canvas.translate(halfW, halfH);
+      canvas.rotate(currentHeading);
+      canvas.drawImageRect(
+        _spriteImage!,
+        Rect.fromLTWH(0, 0, _spriteImage!.width.toDouble(), _spriteImage!.height.toDouble()),
+        Rect.fromCenter(center: Offset.zero, width: size.x, height: size.y),
+        Paint(),
+      );
+      canvas.restore();
+      return;
+    }
 
     // 1. Base Platform (Static octagonal chassis)
     final basePath = Path();

@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../game/grid_layer.dart';
@@ -217,16 +220,22 @@ class AssetRegistryService {
   ];
 
   final Map<String, DartUpAssetOverride> _overrides = {};
+  final Map<String, DartUpAssetOverride> _catalogEntries = {};
   final Map<String, String> _packOverrides = {};
   final ValueNotifier<int> swapRevision = ValueNotifier<int>(0);
   bool _hydrated = false;
+  bool _hydratedFromRemote = false;
+  List<DartUpCatalogAsset> _cachedCatalog = seedCatalog;
 
   bool get isHydrated => _hydrated;
 
   void reset() {
     _overrides.clear();
+    _catalogEntries.clear();
     _packOverrides.clear();
     _hydrated = false;
+    _hydratedFromRemote = false;
+    _cachedCatalog = seedCatalog;
     swapRevision.value++;
   }
 
@@ -241,20 +250,26 @@ class AssetRegistryService {
     swapRevision.value++;
   }
 
-  bool hasOverride(String key) => _overrides.containsKey(key.trim());
+  bool hasOverride(String key) {
+    final cleanKey = key.trim();
+    return _overrides.containsKey(cleanKey) || _catalogEntries.containsKey(cleanKey);
+  }
 
   void loadCatalog(List<DartUpCatalogAsset> assets, {String? scope}) {
-    final filtered = scope == null
-        ? assets
-        : assets.where((a) => a.appScope == scope || a.appScope == 'all');
+    final filtered = (scope == null
+            ? assets
+            : assets.where((a) => a.appScope == scope || a.appScope == 'all'))
+        .toList();
+    _catalogEntries.clear();
     for (final asset in filtered) {
       final cleanKey = asset.assetKey.trim();
       if (cleanKey.isEmpty) continue;
-      _overrides[cleanKey] = DartUpAssetOverride(
+      _catalogEntries[cleanKey] = DartUpAssetOverride(
         url: asset.cdnUrl,
         metadata: asset.metadata,
       );
     }
+    _cachedCatalog = filtered;
     _hydrated = true;
     swapRevision.value++;
   }
@@ -263,8 +278,8 @@ class AssetRegistryService {
     SupabaseClient? supabaseClient,
     bool force = false,
   }) async {
-    if (_hydrated && !force) {
-      return seedCatalog;
+    if (_hydrated && !force && (supabaseClient == null || _hydratedFromRemote)) {
+      return _cachedCatalog;
     }
 
     if (supabaseClient != null) {
@@ -281,6 +296,7 @@ class AssetRegistryService {
               .where((a) => a.assetKey.isNotEmpty && a.cdnUrl.isNotEmpty)
               .toList();
           if (parsed.isNotEmpty) {
+            _hydratedFromRemote = true;
             loadCatalog(parsed, scope: appScope);
             return parsed;
           }
@@ -290,6 +306,7 @@ class AssetRegistryService {
       }
     }
 
+    _hydratedFromRemote = false;
     loadCatalog(seedCatalog, scope: appScope);
     return seedCatalog;
   }
@@ -314,6 +331,12 @@ class AssetRegistryService {
     if (packBase != null) {
       return '$packBase/$finalPath';
     }
+    if (_catalogEntries.containsKey(bareKey)) {
+      return _catalogEntries[bareKey]!.url;
+    }
+    if (_catalogEntries.containsKey(cleanPath)) {
+      return _catalogEntries[cleanPath]!.url;
+    }
     return '$cdnBaseUrl/$cleanPack/$finalPath';
   }
 
@@ -326,17 +349,27 @@ class AssetRegistryService {
     return resolveAssetUrl('isometric-tiles', tileKey);
   }
 
+  String resolveIsometricAtlasUrl() {
+    return resolveAssetUrl('isometric-miniature-dungeon', 'isometric-tiles-atlas');
+  }
+
   String resolveEntityAssetUrl(String entityKey) {
     final cleanKey = entityKey.trim().toLowerCase().replaceAll(' ', '-');
     if (_overrides.containsKey(cleanKey)) {
       return _overrides[cleanKey]!.url;
+    }
+    if (_packOverrides.containsKey('scifi-rts')) {
+      return resolveAssetUrl('scifi-rts', 'units/$cleanKey');
+    }
+    if (_catalogEntries.containsKey(cleanKey)) {
+      return _catalogEntries[cleanKey]!.url;
     }
     return resolveAssetUrl('scifi-rts', 'units/$cleanKey');
   }
 
   DartUpFlameSpriteData? resolveFlameIsometricData(String tileKey) {
     final cleanKey = tileKey.trim();
-    final override = _overrides[cleanKey];
+    final override = _overrides[cleanKey] ?? _catalogEntries[cleanKey];
     final frame = override?.frame ?? isometricAtlasFrames[cleanKey];
     if (frame == null) return null;
 
@@ -350,5 +383,53 @@ class AssetRegistryService {
 
   DartUpFlameSpriteData? resolveTerrainFlameSpriteData(HexTerrainType terrain) {
     return resolveFlameIsometricData(terrainTileKeyFor(terrain));
+  }
+
+  Future<ui.Image?> loadCdnImage(
+    String url, {
+    Future<ByteData> Function(String url)? byteLoader,
+    Duration timeout = const Duration(seconds: 3),
+  }) async {
+    try {
+      if (byteLoader != null) {
+        final data = await byteLoader(url).timeout(timeout);
+        final bytes = data.buffer.asUint8List(data.offsetInBytes, data.lengthInBytes);
+        if (bytes.isEmpty) {
+          return null;
+        }
+        final codec = await ui.instantiateImageCodec(bytes);
+        final frame = await codec.getNextFrame();
+        return frame.image;
+      }
+
+      final provider = NetworkImage(url);
+      final stream = provider.resolve(ImageConfiguration.empty);
+      final completer = Completer<ui.Image?>();
+      late final ImageStreamListener listener;
+      listener = ImageStreamListener(
+        (ImageInfo info, bool _) {
+          stream.removeListener(listener);
+          if (!completer.isCompleted) {
+            completer.complete(info.image);
+          }
+        },
+        onError: (Object _, StackTrace? _) {
+          stream.removeListener(listener);
+          if (!completer.isCompleted) {
+            completer.complete(null);
+          }
+        },
+      );
+      stream.addListener(listener);
+      return await completer.future.timeout(
+        timeout,
+        onTimeout: () {
+          stream.removeListener(listener);
+          return null;
+        },
+      );
+    } catch (_) {
+      return null;
+    }
   }
 }

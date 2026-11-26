@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sd_client/game/grid_layer.dart';
 import 'package:sd_client/services/asset_registry_service.dart';
@@ -52,6 +54,12 @@ void main() {
         'https://custom-ip.sunshade.icu/hex/tile-isometric-grass.png',
       );
 
+      registry.registerPackOverride('scifi-rts', 'https://custom-ip.sunshade.icu/custom-rts');
+      expect(
+        registry.resolveEntityAssetUrl('squad-vanguard-raider'),
+        'https://custom-ip.sunshade.icu/custom-rts/units/squad-vanguard-raider.png',
+      );
+
       registry.registerOverride(
         'turret-defensive',
         const DartUpAssetOverride(
@@ -68,6 +76,20 @@ void main() {
         registry.resolveFlameIsometricData('turret-defensive')!.srcSize,
         [128.0, 128.0],
       );
+    });
+
+    test('fails fast returning null on empty or invalid image bytes', () async {
+      final registry = AssetRegistryService.create();
+      final empty = await registry.loadCdnImage(
+        'https://cdn.sunshade.icu/assets/kenney/empty.png',
+        byteLoader: (_) async => ByteData(0),
+      );
+      final corrupt = await registry.loadCdnImage(
+        'https://cdn.sunshade.icu/assets/kenney/corrupt.png',
+        byteLoader: (_) async => ByteData.sublistView(Uint8List.fromList([7, 8, 9])),
+      );
+      expect(empty, isNull);
+      expect(corrupt, isNull);
     });
   });
 }

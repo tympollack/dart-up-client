@@ -1,6 +1,7 @@
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'entities/entities.dart';
 import 'grid_layer.dart';
@@ -32,7 +33,13 @@ class TacticalRTSComponent extends PositionComponent with TapCallbacks {
   @override
   Future<void> onLoad() async {
     await super.onLoad();
-    await AssetRegistryService.instance.hydrateCatalog();
+    SupabaseClient? client;
+    try {
+      client = Supabase.instance.client;
+    } catch (_) {
+      client = null;
+    }
+    await AssetRegistryService.instance.hydrateCatalog(supabaseClient: client);
 
     // 1. Grid terrain & logistics tethers
     gridComponent = HexGridComponent(grid: grid);
